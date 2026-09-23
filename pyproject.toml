@@ -9,10 +9,13 @@ authors = [
     { name = "Andy Longrée", email = "128273387+Erhazya@users.noreply.github.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn>=0.53.0",
+]
 
 [project.scripts]
-ampere = "ampere:main"
+ampere = "ampere.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.18,<0.13.0"]
@@ -37,6 +40,7 @@ addopts = "-ra --strict-markers"
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.13.1",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.8",
