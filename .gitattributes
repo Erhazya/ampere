@@ -1,0 +1,3 @@
+# Store and check out every text file with Linux line endings (LF),
+# so that files behave the same on Windows, in CI and on the server.
+* text=auto eol=lf

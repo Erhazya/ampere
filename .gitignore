@@ -1,0 +1,28 @@
+# Local working notes, kept out of the public repository
+BRIEF.md
+PROMPTS.md
+TRANSFERT.md
+
+# Python: virtual environment, bytecode and tool caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node: dependencies and build output of the dashboard
+node_modules/
+web/dist/
+
+# Data and results: always regenerated from the sources, never committed
+data/
+
+# Secrets: only .env.example is committed
+.env
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
