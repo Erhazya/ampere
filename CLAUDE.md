@@ -14,7 +14,7 @@ Projet de portfolio décrit dans `BRIEF.md`, un fichier local non versionné : c
 
 ## Commandes et conventions
 
-> Prévues à la fin de l'étape 0 (23 septembre 2026). Rien n'est encore installé : ces commandes deviendront réelles à l'étape 1, qui confirmera les noms marqués « à confirmer ».
+> Les commandes Python et de qualité sont réelles depuis l'incrément 1 de l'étape 1. Celles marquées « à confirmer » arriveront avec les incréments suivants.
 
 ### Installation
 
@@ -33,7 +33,7 @@ Projet de portfolio décrit dans `BRIEF.md`, un fichier local non versionné : c
 
 - `uv run pytest` : tests Python (bilan énergétique, tarifs, changements d'heure, données, non-régression).
 - `uv run ruff format --check .` puis `uv run ruff check .` : formatage et analyse statique.
-- `uv run mypy src` : vérification des types.
+- `uv run mypy src tests` : vérification des types, en mode strict.
 - Tableau de bord : formatage, analyse statique et tests, avec des outils à choisir à l'étape 1.
 
 ### Déploiement
