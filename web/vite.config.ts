@@ -2,12 +2,12 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-// The dashboard calls the API under /api, on its own origin (ADR 016). In development
-// and in `vite preview`, this server relays /api to the API and drops the prefix.
+// The dashboard calls the API under /api/, on its own origin (ADR 016). In development
+// and in `vite preview`, this server relays /api/… to the API and drops the prefix.
 const relayToApi = {
-  '/api': {
+  '/api/': {
     target: 'http://127.0.0.1:8000',
-    rewrite: (path: string) => path.replace(/^\/api/, ''),
+    rewrite: (path: string) => path.replace(/^\/api(?=\/)/, ''),
   },
 };
 

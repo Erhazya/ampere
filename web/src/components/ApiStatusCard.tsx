@@ -1,6 +1,6 @@
-import { HEALTH_URL } from '../api/health';
+import { HEALTH_URL } from '../api/config';
 import type { ApiHealth } from '../api/useApiHealth';
-import { TEXT } from '../text';
+import { reasonText, TEXT } from '../text';
 import styles from './ApiStatusCard.module.css';
 
 /** Time of a check as the project shows it: Paris time, 24-hour clock. */
@@ -10,9 +10,17 @@ const clock = new Intl.DateTimeFormat('en-GB', {
   second: '2-digit',
   hourCycle: 'h23',
   timeZone: 'Europe/Paris',
+  timeZoneName: 'short',
 });
 
 type Kind = 'code' | 'reason';
+
+// Typed maps to the CSS Module classes: a new state or kind cannot lose its style unnoticed.
+const indicator = { checking: styles.checking, up: styles.up, down: styles.down } satisfies Record<
+  ApiHealth['state'],
+  string
+>;
+const tone = { code: styles.code, reason: styles.reason } satisfies Record<Kind, string>;
 interface Row {
   label: string;
   value: string;
@@ -25,7 +33,7 @@ function rowsFor(health: ApiHealth): Row[] {
   if (health.state === 'up')
     rows.push({ label: TEXT.labels.version, value: health.version, kind: 'code' });
   if (health.state === 'down')
-    rows.push({ label: TEXT.labels.reason, value: health.reason, kind: 'reason' });
+    rows.push({ label: TEXT.labels.reason, value: reasonText(health.failure), kind: 'reason' });
   if (health.state !== 'checking')
     rows.push({ label: TEXT.labels.lastCheck, value: clock.format(health.checkedAt) });
   rows.push({ label: TEXT.labels.endpoint, value: HEALTH_URL, kind: 'code' });
@@ -40,15 +48,15 @@ export function ApiStatusCard({ health }: { health: ApiHealth }) {
   return (
     <div className={styles.card}>
       <p className={styles.state}>
-        <span className={`${styles.indicator} ${styles[health.state]}`} aria-hidden="true" />
+        <span className={`${styles.indicator} ${indicator[health.state]}`} aria-hidden="true" />
         <span role="status">{TEXT.states[health.state]}</span>
       </p>
-      <hr className={styles.rule} />
+      <hr className={styles.rule} aria-hidden="true" />
       <dl className={styles.details}>
         {rowsFor(health).map(({ label, value, kind }) => (
           <div key={label} className={styles.row}>
             <dt className={styles.label}>{label}</dt>
-            <dd className={kind ? `${styles.value} ${styles[kind]}` : styles.value}>{value}</dd>
+            <dd className={kind ? `${styles.value} ${tone[kind]}` : styles.value}>{value}</dd>
           </div>
         ))}
       </dl>
