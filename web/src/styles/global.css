@@ -1,0 +1,47 @@
+/* Colours, fonts and spacing of the dashboard: Ampère's side of the portfolio identity (ADR 017). */
+@import './fonts.css';
+
+:root {
+  --ground: #0d0c0b;
+  --surface: #121110;
+  --line: #2e2a26;
+  --ink: #f3efe8;
+  --ink-soft: #d6d0c7;
+  --ink-muted: #a39e96;
+  --amber: #f2b84b;
+  --status-up: #6fd6a8;
+  --status-down: #ff7a55;
+  --font-display: 'Archivo', 'Arial Narrow', sans-serif;
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --space-2: 8px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--ground);
+}
+
+body {
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+p {
+  margin: 0;
+}

@@ -35,13 +35,13 @@ describe('useApiHealth', () => {
   });
 
   it('is down, with the reason, when the API answers with an error', async () => {
-    mockedFetchHealth.mockRejectedValue(new Error('The API answered with status 503'));
+    mockedFetchHealth.mockRejectedValue(new Error('HTTP status 503'));
     const { result } = renderHook(() => useApiHealth());
 
     await advance(0);
     expect(result.current).toMatchObject({
       state: 'down',
-      reason: 'The API answered with status 503',
+      reason: 'HTTP status 503',
     });
   });
 

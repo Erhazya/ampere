@@ -76,4 +76,4 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
   - Dépôt GitHub privé jusqu'à la fin de l'étape 1, puis public.
   - Le brief, les prompts et `TRANSFERT.md` restent locaux, ignorés par Git.
 - Incréments 1 (squelette Python) et 2 (API minimale) terminés.
-- Incrément 3 en cours : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017) et couche qui interroge l'API sont faits. L'écran d'état attend sa maquette (Figma).
+- Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma. Prochaine action : l'incrément 4, la CI GitHub Actions (`TRANSFERT.md`, section 7).

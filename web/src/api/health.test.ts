@@ -29,12 +29,12 @@ describe('fetchHealth', () => {
   it('rejects an error status', async () => {
     vi.stubGlobal('fetch', answering(503, { detail: 'unavailable' }));
 
-    await expect(fetchHealth()).rejects.toThrow('status 503');
+    await expect(fetchHealth()).rejects.toThrow('HTTP status 503');
   });
 
   it('rejects an answer of the wrong shape', async () => {
     vi.stubGlobal('fetch', answering(200, { status: 'ok' }));
 
-    await expect(fetchHealth()).rejects.toThrow('expected shape');
+    await expect(fetchHealth()).rejects.toThrow('Unexpected answer from the API');
   });
 });
