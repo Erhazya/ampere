@@ -11,7 +11,7 @@ L'ADR 012 prévoyait de développer sous Windows. L'auteur préfère finalement 
 
 ### 1. Sur le VPS, une fois sécurisé
 
-Le projet Socle commence par sécuriser l'accès : clés SSH, mot de passe désactivé, pare-feu, protection contre la force brute, swap et utilisateur non root. Le développement se fait ensuite avec cet utilisateur.
+Le projet Socle commence par sécuriser le serveur et par y créer un compte de développement distinct de l'administrateur. Le développement se fait ensuite avec ce compte.
 
 - **Avantages** : Linux identique à la production ; Docker disponible ; rien à installer sur le PC.
 - **Inconvénients** :
