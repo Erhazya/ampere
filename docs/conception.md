@@ -501,6 +501,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [012](decisions/012-environnement-windows-docker-en-ci.md) | Développement sous Windows, Docker en CI | Remplacée par 013 |
 | [013](decisions/013-developpement-sur-le-vps.md) | Développement sur le VPS, une fois sécurisé | Acceptée |
 | [014](decisions/014-environnement-de-developpement-sur-le-vps.md) | Environnement de développement : uv, fnm et Docker rootless dans le compte de développement | Acceptée |
+| [015](decisions/015-outils-du-tableau-de-bord.md) | Outils du tableau de bord : npm, ESLint et Prettier, Vitest et Testing Library | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
