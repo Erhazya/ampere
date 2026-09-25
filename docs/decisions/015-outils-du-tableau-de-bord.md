@@ -1,6 +1,6 @@
 # ADR 015 : outils du tableau de bord
 
-- **Statut** : acceptée ; complète l'ADR 010
+- **Statut** : acceptée ; complète l'ADR 010. Note du 25 septembre 2026 : depuis create-vite 9, le gabarit fournit Oxlint et non plus ESLint. ESLint a été gardé, et les règles JSX que vérifiait Oxlint (les clés des listes, par exemple) viennent d'@eslint-react, compatible avec ESLint 10 (PR n° 7).
 - **Date** : 25 septembre 2026
 
 ## Contexte

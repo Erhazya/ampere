@@ -40,7 +40,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 - `uv run ampere daily` : traitement quotidien complet (ingestion avec rattrapage, contrôles, simulation, prévision, export).
 - `uv run ampere api` : lance l'API FastAPI.
-- `npm run dev`, dans `web/` : lance le tableau de bord.
+- `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016).
 - `uv run ampere reproduce` : régénère tous les chiffres du README à partir des données brutes archivées.
 
 ### Tests et qualité (les mêmes en CI, à chaque push)
@@ -48,7 +48,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - `uv run pytest` : tests Python (bilan énergétique, tarifs, changements d'heure, données, non-régression).
 - `uv run ruff format --check .` puis `uv run ruff check .` : formatage et analyse statique.
 - `uv run mypy src tests` : vérification des types, en mode strict.
-- Tableau de bord, dans `web/` : Prettier (formatage), ESLint (analyse statique), Vitest et Testing Library (tests), puis le build de Vite (ADR 015). Les noms des commandes `npm run` seront fixés avec l'incrément du tableau de bord.
+- Tableau de bord, dans `web/` : `npm run format:check` (Prettier), `npm run lint` (ESLint), `npm run test` (Vitest et Testing Library), puis `npm run build` ; `npm run check` enchaîne les quatre (ADR 015).
 
 ### Déploiement
 
@@ -75,4 +75,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
   - Tableau de bord : npm, ESLint et Prettier, Vitest et Testing Library (ADR 015).
   - Dépôt GitHub privé jusqu'à la fin de l'étape 1, puis public.
   - Le brief, les prompts et `TRANSFERT.md` restent locaux, ignorés par Git.
-- Incréments 1 (squelette Python) et 2 (API minimale) terminés. Prochaine action : l'incrément 3, le tableau de bord minimal (`TRANSFERT.md`, section 7).
+- Incréments 1 (squelette Python) et 2 (API minimale) terminés.
+- Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma. Prochaine action : l'incrément 4, la CI GitHub Actions (`TRANSFERT.md`, section 7).
