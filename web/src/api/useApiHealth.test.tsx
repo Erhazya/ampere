@@ -29,6 +29,7 @@ describe('useApiHealth', () => {
     // Unmount under the fake clock that created the timers, then bring the real one back.
     cleanup();
     vi.useRealTimers();
+    Reflect.deleteProperty(document, 'hidden');
     vi.restoreAllMocks();
     mockedFetchHealth.mockReset();
   });
@@ -93,6 +94,54 @@ describe('useApiHealth', () => {
     expect(result.current).toMatchObject({ state: 'down', failure: { kind: 'http', status: 502 } });
     await advance(REFRESH_MS);
     expect(result.current.state).toBe('up');
+    expect(mockedFetchHealth).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the last answer while checking, and asks again after a timeout', async () => {
+    mockedFetchHealth
+      .mockResolvedValueOnce(ok)
+      .mockImplementationOnce(hanging)
+      .mockResolvedValue(ok);
+    const { result } = renderHook(() => useApiHealth());
+    await advance(0);
+
+    await advance(REFRESH_MS); // the second check starts, and hangs
+    expect(result.current.state).toBe('up');
+    await advance(TIMEOUT_MS);
+    expect(result.current).toMatchObject({ state: 'down', failure: { kind: 'timeout' } });
+    await advance(REFRESH_MS - 1); // counted from the end of the check
+    expect(mockedFetchHealth).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(result.current.state).toBe('up');
+  });
+
+  it('dates every answer, even when the state does not change', async () => {
+    vi.setSystemTime(new Date('2026-09-25T12:00:00Z'));
+    mockedFetchHealth.mockResolvedValue(ok);
+    const { result } = renderHook(() => useApiHealth());
+
+    await advance(0);
+    expect(result.current).toMatchObject({ checkedAt: new Date('2026-09-25T12:00:00Z') });
+    await advance(REFRESH_MS);
+    expect(result.current).toMatchObject({ checkedAt: new Date('2026-09-25T12:00:30Z') });
+  });
+
+  it('pauses while the page is hidden, and asks at once when it is shown again', async () => {
+    let hidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    mockedFetchHealth.mockResolvedValue(ok);
+    renderHook(() => useApiHealth());
+    await advance(0);
+
+    hidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await advance(REFRESH_MS); // the check planned before hiding still runs...
+    await advance(REFRESH_MS * 3); // ...then none while hidden
+    expect(mockedFetchHealth).toHaveBeenCalledTimes(2);
+
+    hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await advance(0);
     expect(mockedFetchHealth).toHaveBeenCalledTimes(3);
   });
 

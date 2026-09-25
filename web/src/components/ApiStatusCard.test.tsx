@@ -27,6 +27,16 @@ describe('ApiStatusCard', () => {
     expect(screen.getByText('14:32:05 CEST')).toBeInTheDocument();
   });
 
+  it('shows winter time, and midnight as 00', () => {
+    render(
+      <ApiStatusCard
+        health={{ state: 'up', version: '0.1.0', checkedAt: new Date('2026-01-14T23:05:00Z') }}
+      />,
+    );
+
+    expect(screen.getByText('00:05:00 CET')).toBeInTheDocument();
+  });
+
   it('gives the reason in plain words when the API is unavailable', () => {
     render(
       <ApiStatusCard

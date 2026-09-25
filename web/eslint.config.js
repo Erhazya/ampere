@@ -1,5 +1,7 @@
-// Lint rules of the dashboard (ADR 015): ESLint with the TypeScript rules, type-aware,
-// and the React rules. Formatting is Prettier's job: its conflicting rules are turned off.
+// Lint rules of the dashboard (ADR 015): ESLint with the TypeScript rules, type-aware; the
+// React rules of @eslint-react (JSX correctness, such as keys in lists) and of
+// eslint-plugin-react-hooks. Formatting is Prettier's job: its conflicting rules are off.
+import eslintReact from '@eslint-react/eslint-plugin';
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
 import reactHooks from 'eslint-plugin-react-hooks';
@@ -15,6 +17,8 @@ export default defineConfig([
     extends: [
       js.configs.recommended,
       tseslint.configs.recommendedTypeChecked,
+      eslintReact.configs['recommended-type-checked'],
+      eslintReact.configs['disable-conflict-eslint-plugin-react-hooks'],
       reactHooks.configs.flat['recommended-latest'],
       reactRefresh.configs.vite,
       prettier,

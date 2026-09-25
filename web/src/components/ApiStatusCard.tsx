@@ -13,18 +13,10 @@ const clock = new Intl.DateTimeFormat('en-GB', {
   timeZoneName: 'short',
 });
 
-type Kind = 'code' | 'reason';
-
-// Typed maps to the CSS Module classes: a new state or kind cannot lose its style unnoticed.
-const indicator = { checking: styles.checking, up: styles.up, down: styles.down } satisfies Record<
-  ApiHealth['state'],
-  string
->;
-const tone = { code: styles.code, reason: styles.reason } satisfies Record<Kind, string>;
 interface Row {
   label: string;
   value: string;
-  kind?: Kind;
+  kind?: 'code' | 'reason';
 }
 
 /** The details worth showing for each state: nothing is known yet while checking. */
@@ -48,7 +40,7 @@ export function ApiStatusCard({ health }: { health: ApiHealth }) {
   return (
     <div className={styles.card}>
       <p className={styles.state}>
-        <span className={`${styles.indicator} ${indicator[health.state]}`} aria-hidden="true" />
+        <span className={`${styles.indicator} ${styles[health.state]}`} aria-hidden="true" />
         <span role="status">{TEXT.states[health.state]}</span>
       </p>
       <hr className={styles.rule} aria-hidden="true" />
@@ -56,7 +48,7 @@ export function ApiStatusCard({ health }: { health: ApiHealth }) {
         {rowsFor(health).map(({ label, value, kind }) => (
           <div key={label} className={styles.row}>
             <dt className={styles.label}>{label}</dt>
-            <dd className={kind ? `${styles.value} ${tone[kind]}` : styles.value}>{value}</dd>
+            <dd className={kind ? `${styles.value} ${styles[kind]}` : styles.value}>{value}</dd>
           </div>
         ))}
       </dl>

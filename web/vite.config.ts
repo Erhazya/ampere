@@ -13,9 +13,10 @@ const relayToApi = {
 
 export default defineConfig({
   plugins: [react()],
-  // Loopback only: nothing is exposed to the network during development.
-  server: { host: '127.0.0.1', port: 5173, strictPort: true, proxy: relayToApi },
-  preview: { host: '127.0.0.1', port: 4173, strictPort: true, proxy: relayToApi },
+  // Loopback only: nothing is exposed to the network during development. No CORS either,
+  // since the dashboard and the API share one origin (ADR 016). `vite preview` inherits all
+  // of this from `server`.
+  server: { host: '127.0.0.1', port: 5173, strictPort: true, cors: false, proxy: relayToApi },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

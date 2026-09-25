@@ -6,17 +6,14 @@ export interface Health {
   version: string;
 }
 
+/** A failure found in the answer itself: an error status, or content that is not the health data. */
+type AnswerFailure = { kind: 'http'; status: number } | { kind: 'format' };
+
 /** Why a check failed, in terms the interface puts into words (text.ts). */
 export type Failure =
-  | { kind: 'timeout' }
-  | { kind: 'network' }
-  | { kind: 'http'; status: number }
-  | { kind: 'format' }
-  | { kind: 'unexpected' };
+  AnswerFailure | { kind: 'timeout' } | { kind: 'network' } | { kind: 'unexpected' };
 
-type AnswerFailure = Extract<Failure, { kind: 'http' } | { kind: 'format' }>;
-
-/** A failure found in the answer itself: an error status, or content that is not the health data. */
+/** The error thrown for an AnswerFailure. */
 export class HealthError extends Error {
   readonly failure: AnswerFailure;
 
@@ -29,8 +26,9 @@ export class HealthError extends Error {
 
 /**
  * Asks the API whether it is up. Rejects with a HealthError when the answer has an error
- * status (from the API, or from the relay when the API is down) or is not the health
- * data; with the error of fetch itself when the network fails or `signal` aborts.
+ * status (from the API, or from the relay when the API is down) or is not the health data;
+ * otherwise with the error of fetch itself: a network failure, before or while the body is
+ * read, or `signal` aborting.
  */
 export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   const response = await fetch(HEALTH_URL, {
@@ -42,16 +40,13 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   if (!response.ok) {
     throw new HealthError({ kind: 'http', status: response.status });
   }
-  // A relay that loses the /api rule answers 200 with the dashboard's own HTML page.
-  if (!(response.headers.get('Content-Type') ?? '').includes('application/json')) {
-    throw new HealthError({ kind: 'format' });
-  }
   let body: unknown;
   try {
     body = await response.json();
   } catch (error) {
-    if (signal?.aborted) throw error;
-    throw new HealthError({ kind: 'format' }, { cause: error });
+    // Only a body that is not JSON (an HTML page, say) is an unexpected answer.
+    if (error instanceof SyntaxError) throw new HealthError({ kind: 'format' }, { cause: error });
+    throw error;
   }
   if (!isHealth(body)) {
     throw new HealthError({ kind: 'format' });

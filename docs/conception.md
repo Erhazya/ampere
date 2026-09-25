@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée à l'étape 1 (ADR 012 à 014).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée à l'étape 1 (ADR 012 à 017).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 

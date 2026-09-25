@@ -5,7 +5,7 @@ import type { Failure } from './api/health';
 export const TEXT = {
   tagline: 'Energy digital twin',
   statusTitle: 'API status',
-  statusIntro: `The dashboard asks the API every ${REFRESH_MS / 1000} seconds.`,
+  statusIntro: `The dashboard asks the API again ${REFRESH_MS / 1000} seconds after each answer.`,
   states: { checking: 'Checking…', up: 'Online', down: 'Unavailable' },
   labels: { version: 'Version', lastCheck: 'Last check', endpoint: 'Endpoint', reason: 'Reason' },
 } as const;
@@ -16,7 +16,8 @@ export function reasonText(failure: Failure): string {
     case 'timeout':
       return `No answer within ${TIMEOUT_MS / 1000} s`;
     case 'network':
-      return 'No network connection';
+      // fetch cannot tell the user's network from the dashboard's own server being down.
+      return 'Cannot reach the server';
     case 'http':
       // 502, 503 and 504 come from the relay in front of the API when the API does not answer.
       return [502, 503, 504].includes(failure.status)
