@@ -10,6 +10,7 @@ Projet de portfolio décrit dans `BRIEF.md`, un fichier local non versionné : c
 - Avance par petits incréments testés, et explique brièvement chaque notion nouvelle.
 - Je dois pouvoir expliquer chaque ligne en entretien : jamais de gros bloc de code sans explication.
 - Code, noms, commentaires et messages de commit en anglais ; documentation en français, traduite en anglais à chaque version publiée.
+- Rédaction : tout texte destiné à des lecteurs (documentation, README, ADR, commits, textes d'interface) suit le skill `ecriture-naturelle` : des phrases concrètes, sans les tics des textes générés.
 - Aucun secret dans le dépôt, qui sera public.
 
 ## Outils Claude
