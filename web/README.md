@@ -1,32 +1,21 @@
-# React + TypeScript + Vite
+# Tableau de bord d'Ampère
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Interface web du jumeau numérique : React, TypeScript et Vite (ADR 010), avec les outils de l'ADR 015.
 
-Currently, two official plugins are available:
+## Commandes
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Dans ce dossier, sous le compte de développement :
 
-## React Compiler
+- `npm ci` : installe les versions exactes de `package-lock.json`.
+- `npm run dev` : serveur de développement sur http://127.0.0.1:5173. Il relaie `/api` vers l'API, qui doit tourner à côté (`uv run ampere api`, à la racine du dépôt ; ADR 016).
+- `npm run test` : les tests (Vitest et Testing Library) ; `npm run test:watch` les relance à chaque modification.
+- `npm run lint` : l'analyse statique (ESLint).
+- `npm run format` : la mise en forme (Prettier) ; `npm run format:check` vérifie sans rien changer.
+- `npm run build` : vérifie les types, puis produit les fichiers statiques dans `dist/`.
+- `npm run check` : mise en forme, analyse, tests et build, dans l'ordre de la CI.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Organisation
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- `src/api/` : les appels à l'API, et les hooks React qui les utilisent.
+- `src/test/setup.ts` : la préparation commune des tests.
+- Styles : CSS Modules, un fichier `Nom.module.css` à côté de chaque composant (ADR 017).
