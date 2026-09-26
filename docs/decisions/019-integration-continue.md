@@ -55,4 +55,5 @@ Option 1 dans les deux cas.
 
 - Chaque pull request affiche trois statuts : « Python », « Dashboard » et celui de gitleaks. Les pull requests de Dependabot passent les mêmes contrôles.
 - Changer de version de Node ou de uv se fait dans un seul fichier, suivi par Git.
+- La première exécution a duré 20 secondes pour le job Python et 64 secondes pour le tableau de bord, en parallèle. GitHub compte chaque job à la minute entamée : 3 minutes par exécution, plus 1 pour gitleaks, soit environ 500 exécutions dans les 2 000 minutes mensuelles.
 - Quand le dépôt deviendra public (incrément 6), les deux jobs deviendront des contrôles obligatoires avant toute fusion sur `main`.
