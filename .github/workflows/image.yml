@@ -1,0 +1,61 @@
+# Builds the demo's image and checks that a container starts and answers: on every pull
+# request, and on every push to main, where the image is also published to GHCR under the
+# commit's tag (ADR 020). No cache: every build starts from the pinned base images.
+name: image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Same grouping as ci.yml: outdated pull request runs are cancelled, runs on main are not.
+  group: image-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/erhazya/ampere
+
+jobs:
+  check:
+    name: Image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image
+        run: docker build --file deploy/Dockerfile --tag "$IMAGE:check" .
+      - name: Check that a container starts and answers
+        run: deploy/smoke-test.sh "$IMAGE:check"
+
+  publish:
+    name: Publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Only this job, on main, may write to GHCR.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image
+        run: >-
+          docker build --file deploy/Dockerfile
+          --label "org.opencontainers.image.revision=$GITHUB_SHA"
+          --tag "$IMAGE:sha-$GITHUB_SHA" .
+      - name: Check that a container starts and answers
+        run: deploy/smoke-test.sh "$IMAGE:sha-$GITHUB_SHA"
+      # sha-<commit> is never replaced, and main never goes back to an older commit.
+      - name: Publish to GHCR, under the commit and as main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: deploy/publish.sh "$IMAGE"

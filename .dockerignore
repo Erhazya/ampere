@@ -1,0 +1,16 @@
+# Only what deploy/Dockerfile needs enters the build context: never the local notes, the
+# virtual environment, the dependencies installed for development or a previous build.
+# At the root, where the legacy builder and BuildKit both read it.
+*
+!.python-version
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!web/
+web/node_modules/
+web/dist/
+**/__pycache__/
+# Last, so that it wins over !src/ and !web/: local environment files, which Vite would read.
+**/.env*

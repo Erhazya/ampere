@@ -4,6 +4,7 @@ The API declares its routes under /api, its documentation included, and keeps /h
 for the hosting platform. Online, it also serves the built dashboard (ADR 018).
 """
 
+import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
@@ -60,6 +61,9 @@ def create_app(dashboard: Path | None = None) -> FastAPI:
     # The hosting platform checks every demo at /healthz; the dashboard asks /api/healthz.
     app.add_api_route("/healthz", healthz)
     if dashboard is not None:
+        # Python knows the type of .woff2 fonts only from /etc/mime.types, which the Docker image
+        # lacks: without this line, the dashboard's fonts would go out as application/octet-stream.
+        mimetypes.add_type("font/woff2", ".woff2")
         # The files get a router of their own, so that its dependency, the cache rule, applies
         # to them only. FastAPI looks for a file only when no route matched, after the 405s and
         # the final-slash redirects of the API. No fallback page: an unknown path is a 404.

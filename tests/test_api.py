@@ -1,5 +1,6 @@
 """The HTTP API, tested in memory with FastAPI's test client."""
 
+import mimetypes
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -86,6 +87,21 @@ def test_browsers_check_every_file_but_the_hashed_ones(online: TestClient) -> No
     assert "cache-control" not in online.get("/assets/index-1a2b3c.js").headers
     # The rule is for files only: the API's answers never get it.
     assert "cache-control" not in online.get("/api/healthz").headers
+
+
+@pytest.fixture
+def python_types_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python's own list of file types, without /etc/mime.types, as in the Docker image."""
+    # mimetypes keeps its table in a private global, which mimetypes.init() only extends: a new
+    # table, built without the system files, replaces it for this test.
+    monkeypatch.setattr(mimetypes, "_db", mimetypes.MimeTypes())
+
+
+@pytest.mark.usefixtures("python_types_only")
+def test_fonts_keep_their_type_without_the_system_list(dashboard: Path) -> None:
+    with TestClient(create_app(dashboard=dashboard)) as online:
+        font = online.get("/assets/geist-1a2b3c.woff2")
+    assert font.headers["content-type"] == "font/woff2"
 
 
 def test_refuses_a_folder_that_is_not_a_build(dashboard: Path) -> None:

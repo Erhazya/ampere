@@ -32,7 +32,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Installation
 
-- Prérequis, dans le compte de développement du VPS (ADR 013 et 014) : Git, uv (qui installe lui-même Python 3.13), Node.js 24 par fnm, et Docker en mode rootless. La CI reprend ces versions : Python depuis `.python-version`, Node 24 depuis `web/.node-version`, et exactement la version de uv du compte de développement, écrite dans `.github/workflows/ci.yml` (ADR 019).
+- Prérequis, dans le compte de développement du VPS (ADR 013 et 014) : Git, uv (qui installe lui-même Python 3.13), Node.js 24 par fnm, et Docker en mode rootless, démarré à la demande avec `systemctl --user start docker`. La CI reprend ces versions : Python depuis `.python-version`, Node 24 depuis `web/.node-version`, et exactement la version de uv du compte de développement, écrite dans `.github/workflows/ci.yml` et `deploy/Dockerfile` (ADR 019 et 020).
 - `uv sync` : crée l'environnement Python et installe les versions exactes de `uv.lock`.
 - `npm ci`, dans `web/` : installe les versions exactes de `package-lock.json` pour le tableau de bord (ADR 015).
 
@@ -42,6 +42,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - `uv run ampere api` : lance l'API FastAPI sur `127.0.0.1:8000`, avec ses routes sous `/api`. Avec `--dashboard web/dist`, elle sert aussi le tableau de bord construit, comme en ligne (ADR 018).
 - `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016 et 018).
 - `uv run ampere reproduce` : régénère tous les chiffres du README à partir des données brutes archivées.
+- `docker build --file deploy/Dockerfile --tag ampere .`, à la racine, puis `deploy/smoke-test.sh ampere` : construit l'image de la démo et vérifie qu'un conteneur démarre et répond (ADR 020).
 
 ### Tests et qualité (les mêmes en CI, sur chaque pull request et chaque push vers `main` ; ADR 019)
 
@@ -58,7 +59,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Conventions du projet
 
-- **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request.
+- **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request. La copie de travail du VPS a `core.fileMode` à `false` : Git n'y voit pas le bit d'exécution, et un script se rend exécutable avec `git update-index --chmod=+x <fichier>`.
 - **Temps** : dates stockées en UTC, pas de 15 min, heure de Paris seulement à l'affichage.
 - **Période de test** (1er juillet 2025 au 30 juin 2026) : jamais utilisée hors de l'évaluation finale (ADR 007).
 - **Données** : les données brutes sont conservées telles que reçues, avec leur date de réception ; aucun trou n'est comblé en silence.
@@ -79,4 +80,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma.
 - Ensuite, l'API déclare ses routes sous `/api` et, en ligne, sert aussi les fichiers du tableau de bord (ADR 018).
 - Incrément 4 terminé : CI GitHub Actions, un job Python et un job tableau de bord (ADR 019).
-- Prochaine action : l'incrément 5, les images Docker publiées sur GHCR (`TRANSFERT.md`, section 7).
+- Incrément 5 terminé : image Docker vérifiée sur chaque pull request, publiée sur GHCR depuis `main` (ADR 020).
+- Prochaine action : les incréments 6 et 7, le dépôt public et le déploiement (`TRANSFERT.md`, section 7).
