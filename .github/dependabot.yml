@@ -1,5 +1,5 @@
-# Weekly updates of the GitHub Actions used by the workflows.
-# Add one entry per ecosystem when its manifest lands (uv, npm, gradle, cargo).
+# Weekly update pull requests for the actions of the workflows, the Python packages (uv)
+# and the dashboard's packages (npm).
 version: 2
 updates:
   - package-ecosystem: github-actions

@@ -12,9 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  # A new push to a pull request cancels the run it makes outdated; runs on main all finish.
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request, so that a new push cancels the run it makes outdated. Each
+  # push to main gets a group of its own, its run id, so that no run on main is cancelled.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   python:
@@ -25,17 +26,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Installs the uv version set by required-version in pyproject.toml.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: Install the exact versions of uv.lock, and Python from .python-version
+        with:
+          # The uv of the development account, checked against the sha256 published with
+          # its release (uv-x86_64-unknown-linux-gnu.tar.gz).
+          version: "0.12.18"
+          checksum: "89eadd7c76fc063887959510d5ba0ab1264dfd5f1143b925ddb73021a40acf16"
+      - name: Install the locked dependencies, and Python from .python-version
+        id: install
         run: uv sync --locked
+      # Each check runs even when an earlier one failed, but not after a failed install.
       - name: Formatting (ruff format)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: uv run ruff format --check .
       - name: Static analysis (ruff check)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: uv run ruff check .
       - name: Types (mypy, strict)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: uv run mypy src tests
       - name: Tests (pytest)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: uv run pytest
 
   dashboard:
@@ -54,13 +65,19 @@ jobs:
           node-version-file: web/.node-version
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install the exact versions of package-lock.json
+      - name: Install the locked dependencies (package-lock.json)
+        id: install
         run: npm ci
+      # Each check runs even when an earlier one failed, but not after a failed install.
       - name: Formatting (Prettier)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: npm run format:check
       - name: Static analysis (ESLint)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: npm run lint
       - name: Tests (Vitest)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: npm run test
       - name: Types and build (tsc, Vite)
+        if: ${{ !cancelled() && steps.install.conclusion == 'success' }}
         run: npm run build

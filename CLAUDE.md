@@ -32,7 +32,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Installation
 
-- Prérequis, dans le compte de développement du VPS (ADR 013 et 014) : Git, uv (qui installe lui-même Python 3.13), Node.js 24 par fnm, et Docker en mode rootless. Les versions sont fixées dans le dépôt : `.python-version`, `web/.node-version` et `required-version` dans `pyproject.toml` (ADR 019).
+- Prérequis, dans le compte de développement du VPS (ADR 013 et 014) : Git, uv (qui installe lui-même Python 3.13), Node.js 24 par fnm, et Docker en mode rootless. La CI reprend ces versions : Python depuis `.python-version`, Node 24 depuis `web/.node-version`, et exactement la version de uv du compte de développement, écrite dans `.github/workflows/ci.yml` (ADR 019).
 - `uv sync` : crée l'environnement Python et installe les versions exactes de `uv.lock`.
 - `npm ci`, dans `web/` : installe les versions exactes de `package-lock.json` pour le tableau de bord (ADR 015).
 

@@ -412,7 +412,7 @@ Tout le traitement des données est écrit en Python ; le tableau de bord, en Ty
 | Lieu | Rôle |
 |---|---|
 | VPS, session de développement (ADR 013) | Développement, entraînements, mise au point, évaluation finale sur la période de test, précalcul des scénarios, notebooks |
-| GitHub Actions | CI à chaque push (formatage, analyse statique, tests, build), construction des images Docker publiées sur GHCR, déploiement |
+| GitHub Actions | CI sur chaque pull request et chaque push vers `main` (formatage, analyse statique, types, tests, build ; ADR 019), construction des images Docker publiées sur GHCR, déploiement |
 | VPS | Traitement quotidien (ADR 011), API, qui sert aussi les fichiers du tableau de bord (ADR 018) ; plus tard, l'assistant chargé à la demande |
 
 Les modèles entraînés sont livrés au traitement quotidien sous forme de fichiers versionnés. Le mode de livraison sera choisi à l'étape 5.

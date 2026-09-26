@@ -1,6 +1,6 @@
 # ADR 019 : intégration continue, un workflow et deux jobs
 
-- **Statut** : acceptée ; applique les ADR 009 et 015
+- **Statut** : acceptée ; complète les ADR 009, 014 et 015
 - **Date** : 26 septembre 2026
 
 ## Contexte
@@ -8,11 +8,13 @@
 D'après le `CLAUDE.md`, la CI lance les mêmes contrôles qu'en développement. Le projet en a deux séries :
 
 - le code Python, géré avec uv (ADR 009) : `ruff format --check`, `ruff check`, `mypy` en mode strict et `pytest` ;
-- le tableau de bord, géré avec npm (ADR 015) : la mise en forme avec Prettier, l'analyse avec ESLint, les tests avec Vitest, puis le build de Vite.
+- le tableau de bord, géré avec npm (ADR 015) : la mise en forme avec Prettier, l'analyse avec ESLint, les tests avec Vitest, puis la vérification des types et le build.
 
-Un premier workflow, `secrets.yml`, cherche déjà des secrets avec gitleaks. Il fixe les conventions du dépôt : déclenchement sur chaque pull request et chaque push vers `main`, permissions en lecture seule, image `ubuntu-24.04`, actions désignées par l'empreinte de leur commit.
+Un premier workflow, `secrets.yml`, cherche déjà des secrets avec gitleaks. Il fixe des conventions : déclenchement sur chaque pull request et chaque push vers `main`, permissions en lecture seule, image `ubuntu-24.04`, actions désignées par l'empreinte de leur commit.
 
-Le dépôt reste privé jusqu'à la fin de l'étape 1. Avec un compte GitHub gratuit, un dépôt privé dispose de 2 000 minutes de CI par mois, et les contrôles obligatoires avant une fusion ne sont possibles que sur un dépôt public.
+Le dépôt reste privé jusqu'à la fin de l'étape 1, sur un compte GitHub gratuit. Tous les dépôts privés du compte se partagent 2 000 minutes de CI par mois, et un contrôle ne peut être rendu obligatoire avant une fusion que sur un dépôt public. Un dépôt public ne consomme pas ces minutes.
+
+En développement, uv 0.12.18 installe Python 3.13, et fnm fournit Node 24 par son alias par défaut (ADR 014). Dependabot met à jour `uv.lock` avec sa propre version de uv : 0.12.15 le 25 septembre 2026.
 
 ## Options envisagées
 
@@ -20,40 +22,43 @@ Le dépôt reste privé jusqu'à la fin de l'étape 1. Avec un compte GitHub gra
 
 1. **Un workflow, deux jobs en parallèle**
    - **Avantages** : le code Python et le tableau de bord ont chacun leur statut sur la pull request, et un échec d'un côté ne cache pas l'autre. Les deux jobs tournent en même temps.
-   - **Inconvénients** : deux machines démarrent à chaque fois, même quand une seule partie a changé.
+   - **Inconvénients** : deux machines démarrent à chaque fois, et GitHub compte chaque job à la minute entamée.
 2. **Un seul job**
-   - **Avantages** : le fichier le plus court.
-   - **Inconvénients** : tout tourne à la suite, et le premier échec arrête le reste.
+   - **Avantages** : le fichier le plus court, et une seule machine, donc moins de minutes décomptées.
+   - **Inconvénients** : tout tourne à la suite, et les deux parties n'ont qu'un statut à elles deux.
 3. **Deux workflows, chacun filtré sur son dossier**
    - **Avantages** : seuls les contrôles utiles tournent, ce qui économise des minutes.
-   - **Inconvénients** : une pull request qui ne touche que la documentation n'a aucun statut, ce qui complique les contrôles obligatoires.
+   - **Inconvénients** : un contrôle obligatoire sauté par un filtre reste « en attente » et bloque la fusion.
 
-### Versions de Python, de Node et de uv
+### Versions des outils
 
-1. **Dans des fichiers du dépôt**, lus en développement comme en CI
-   - **Avantages** : chaque version est écrite une seule fois, et le développement et la CI ne peuvent pas s'écarter.
-   - **Inconvénients** : les versions sont réparties dans trois fichiers.
-2. **Dans le workflow**
-   - **Avantages** : tout se lit dans un seul fichier.
-   - **Inconvénients** : rien ne signale un écart avec les versions du développement.
+1. **Des plages lues par les outils** : `required-version` de uv dans `pyproject.toml`, Node dans `web/.node-version`
+   - **Avantages** : pas de version dans le workflow.
+   - **Inconvénients** : uv refuse de tourner hors de `required-version`, y compris celui de Dependabot, ce qui bloque ses mises à jour de `uv.lock`. Une plage laisse la CI prendre la dernière version corrective : uv 0.12.19 à la première exécution, contre 0.12.18 en développement. Et fnm, dans le compte de développement, ne lit pas `.node-version`.
+2. **uv exact dans la CI, Node et Python par version**
+   - **Avantages** : l'outil qui change le plus souvent, uv, est le même qu'en développement et vérifié par sa somme SHA-256. Dependabot n'est pas gêné.
+   - **Inconvénients** : la version de uv s'écrit dans le workflow, et sa mise à jour se fait à la main. Les versions correctives de Node et de Python peuvent différer entre le développement et la CI.
+3. **Tout en versions exactes**, avec fnm réglé pour lire `.node-version` dans le compte de développement
+   - **Avantages** : le développement et la CI deviennent identiques.
+   - **Inconvénients** : chaque mise à jour se fait à la main, et le profil du compte de développement change.
 
 ## Décision
 
-Option 1 dans les deux cas.
+Option 1 pour l'organisation, option 2 pour les versions.
 
 - Le workflow `.github/workflows/ci.yml` a deux jobs, « Python » et « Dashboard ». Ils tournent en parallèle sur `ubuntu-24.04`, pour chaque pull request et chaque push vers `main`.
-- Ils lancent les commandes du `CLAUDE.md`, une étape par contrôle, après une installation exacte : `uv sync --locked` échoue si `uv.lock` n'est plus à jour, et `npm ci` installe exactement `package-lock.json`.
-- Les versions viennent du dépôt : Python dans `.python-version`, Node dans `web/.node-version` (24), et uv dans `required-version`, dans la section `[tool.uv]` de `pyproject.toml`. En développement, uv et fnm lisent les mêmes fichiers, et uv refuse de tourner hors de sa plage de versions.
-- Le workflow reprend les conventions de `secrets.yml` :
-  - des permissions en lecture seule ;
-  - des actions désignées par l'empreinte de leur commit, avec la version en commentaire, que Dependabot met à jour ;
-  - `persist-credentials: false`, pour que le jeton de GitHub ne reste pas sur la machine pendant l'installation des dépendances.
-- Un nouveau push sur une pull request annule l'exécution qu'il rend inutile ; sur `main`, toutes les exécutions vont au bout. Chaque job s'arrête au bout de 10 minutes.
-- Pas d'essai de bout en bout pour l'instant : il viendra avec Playwright.
+- Ils lancent les commandes du `CLAUDE.md` après une installation exacte : `uv sync --locked` échoue si `uv.lock` n'est plus à jour, et `npm ci` installe exactement `package-lock.json`.
+- Chaque contrôle est une étape distincte du job. Tous tournent, même quand un contrôle précédent a échoué, sauf si l'installation a échoué ; le job échoue dès qu'un contrôle échoue.
+- La CI installe uv 0.12.18, la version du développement, et vérifie sa somme SHA-256 publiée avec la version. Python vient de `.python-version` (3.13), que uv lit en développement comme en CI. Node vient de `web/.node-version` (24), que la CI lit ; en développement, fnm fournit la même version majeure.
+- Comme `secrets.yml` : permissions en lecture seule, actions désignées par l'empreinte de leur commit, avec la version en commentaire, et mises à jour par Dependabot. En plus, `persist-credentials: false` empêche la copie du dépôt de laisser le jeton de GitHub dans la configuration de Git, où un script d'installation d'une dépendance pourrait le lire.
+- Chaque pull request a son groupe d'exécutions : un nouveau push annule l'exécution qu'il rend inutile. Chaque push vers `main` a son propre groupe, pour qu'aucune exécution n'y soit annulée.
+- Un job qui dépasse 10 minutes est arrêté.
+- Pas de tests de bout en bout pour l'instant : ils viendront avec Playwright.
 
 ## Conséquences
 
 - Chaque pull request affiche trois statuts : « Python », « Dashboard » et celui de gitleaks. Les pull requests de Dependabot passent les mêmes contrôles.
-- Changer de version de Node ou de uv se fait dans un seul fichier, suivi par Git.
-- La première exécution a duré 20 secondes pour le job Python et 64 secondes pour le tableau de bord, en parallèle. GitHub compte chaque job à la minute entamée : 3 minutes par exécution, plus 1 pour gitleaks, soit environ 500 exécutions dans les 2 000 minutes mensuelles.
-- Quand le dépôt deviendra public (incrément 6), les deux jobs deviendront des contrôles obligatoires avant toute fusion sur `main`.
+- Mettre uv à jour demande deux changements : la version et la somme SHA-256 dans `ci.yml`, et `uv self update` dans le compte de développement.
+- Changer de version majeure de Node touche plusieurs endroits : `web/.node-version`, `engines` et `@types/node` dans `web/package.json`, et l'alias par défaut de fnm.
+- La deuxième exécution a duré 18 secondes pour le job Python et 29 secondes pour le tableau de bord. GitHub compte chaque job à la minute entamée : une exécution coûte 3 minutes avec gitleaks, parfois 4 quand une machine tarde à démarrer. À la première exécution, le job du tableau de bord a attendu 37 secondes avant sa première étape.
+- Quand le dépôt deviendra public, à la fin de l'étape 1, les trois statuts deviendront des contrôles obligatoires avant toute fusion sur `main`.
