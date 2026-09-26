@@ -1,6 +1,6 @@
 import { HEALTH_URL } from './config';
 
-/** Answer of GET /healthz when the API is up (see src/ampere/api.py). */
+/** Answer of GET /api/healthz when the API is up (see src/ampere/api.py). */
 export interface Health {
   status: 'ok';
   version: string;
