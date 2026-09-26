@@ -12,3 +12,5 @@
 web/node_modules/
 web/dist/
 **/__pycache__/
+# Last, so that it wins over !src/ and !web/: local environment files, which Vite would read.
+**/.env*

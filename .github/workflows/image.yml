@@ -35,7 +35,7 @@ jobs:
         run: deploy/smoke-test.sh "$IMAGE:check"
 
   publish:
-    name: Image
+    name: Publish
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -51,13 +51,11 @@ jobs:
         run: >-
           docker build --file deploy/Dockerfile
           --label "org.opencontainers.image.revision=$GITHUB_SHA"
-          --tag "$IMAGE:sha-$GITHUB_SHA" --tag "$IMAGE:main" .
+          --tag "$IMAGE:sha-$GITHUB_SHA" .
       - name: Check that a container starts and answers
         run: deploy/smoke-test.sh "$IMAGE:sha-$GITHUB_SHA"
+      # sha-<commit> is never replaced, and main never goes back to an older commit.
       - name: Publish to GHCR, under the commit and as main
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker push "$IMAGE:sha-$GITHUB_SHA"
-          docker push "$IMAGE:main"
+        run: deploy/publish.sh "$IMAGE"

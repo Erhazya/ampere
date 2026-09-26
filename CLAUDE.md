@@ -59,7 +59,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Conventions du projet
 
-- **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request. Le dépôt a `core.fileMode` à `false`, à cause des ACL du VPS : un script se rend exécutable dans Git avec `git update-index --chmod=+x <fichier>`.
+- **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request. La copie de travail du VPS a `core.fileMode` à `false` : Git n'y voit pas le bit d'exécution, et un script se rend exécutable avec `git update-index --chmod=+x <fichier>`.
 - **Temps** : dates stockées en UTC, pas de 15 min, heure de Paris seulement à l'affichage.
 - **Période de test** (1er juillet 2025 au 30 juin 2026) : jamais utilisée hors de l'évaluation finale (ADR 007).
 - **Données** : les données brutes sont conservées telles que reçues, avec leur date de réception ; aucun trou n'est comblé en silence.
@@ -80,5 +80,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma.
 - Ensuite, l'API déclare ses routes sous `/api` et, en ligne, sert aussi les fichiers du tableau de bord (ADR 018).
 - Incrément 4 terminé : CI GitHub Actions, un job Python et un job tableau de bord (ADR 019).
-- Incrément 5 terminé : image Docker construite par la CI et publiée sur GHCR (ADR 020).
+- Incrément 5 terminé : image Docker vérifiée sur chaque pull request, publiée sur GHCR depuis `main` (ADR 020).
 - Prochaine action : les incréments 6 et 7, le dépôt public et le déploiement (`TRANSFERT.md`, section 7).
