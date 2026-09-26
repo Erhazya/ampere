@@ -70,13 +70,15 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **ADR (Architecture Decision Record)** : court document qui garde la trace d'une décision : le contexte, les options envisagées, la décision et ses conséquences. Le projet en rédige un par décision importante, dans `docs/decisions/`.
 
-**Cache du navigateur** : copies des réponses que le navigateur garde pour ne pas les redemander. Avec l'en-tête `Cache-Control: no-cache`, il revérifie la page auprès du serveur à chaque visite, et le serveur répond 304 si elle n'a pas changé. Les fichiers du build ont un nom qui change avec leur contenu : le navigateur peut les garder sans risque (ADR 018).
+**Cache du navigateur** : copies des réponses que le navigateur garde pour ne pas les redemander. Avec l'en-tête `Cache-Control: no-cache`, il revérifie la page auprès du serveur à chaque visite, en envoyant l'empreinte de sa copie (l'ETag), et le serveur répond 304 si elle n'a pas changé. Les fichiers de `assets/` du build ont un nom qui change avec leur contenu : le navigateur peut les garder sans risque. Les autres, la page comprise, sont revérifiés à chaque visite (ADR 018).
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
 **CSS Modules** : fichiers CSS rattachés à un composant, dont l'outil de construction rend les noms de classes uniques. Deux composants peuvent ainsi avoir chacun une classe `.card` sans se gêner (ADR 017).
+
+**Dépendance (FastAPI)** : fonction que FastAPI exécute avant de répondre, déclarée avec `Depends`. Celle du routeur des fichiers du tableau de bord pose l'en-tête `Cache-Control` sur chaque fichier servi (ADR 018).
 
 **Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception.
 
@@ -98,6 +100,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Origine** : ce qui identifie le site d'une page pour le navigateur : le protocole, le nom et le port, par exemple `https://ampere.exemple:443`. Par sécurité, une page ne peut lire que les réponses de sa propre origine, sauf autorisation CORS.
 
+**Page de repli** (*fallback*) : page qu'un serveur de fichiers renvoie quand le fichier demandé n'existe pas, par exemple `index.html` pour une application dont les pages sont gérées dans le navigateur. L'API n'en a pas : un chemin inconnu reçoit un 404 (ADR 018).
+
 **Parquet** : format de fichier standard de la data, compressé et rangé par colonnes. Lire une seule colonne ne demande pas de lire tout le fichier.
 
 **Point de santé (`/healthz`)** : route qui répond tant que le processus tourne. La plateforme du portfolio l'interroge pour savoir si une démo est en vie. Le tableau de bord interroge la même fonction sous `/api/healthz` pour afficher l'état de l'API.
@@ -107,5 +111,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Relais (*reverse proxy*)** : serveur qui reçoit les requêtes à la place d'un autre et les lui transmet. En développement, le serveur de Vite relaie `/api/…` vers l'API, si bien que le navigateur ne voit qu'une origine.
 
 **Run (d'un modèle météo)** : une exécution complète d'un modèle de prévision, lancée à heure fixe (par exemple à 00 h UTC). Chaque run produit une prévision pour les jours suivants ; il n'est disponible que quelques heures après son lancement.
+
+**Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke toutes les dates en UTC et ne les convertit en heure de Paris qu'à l'affichage. Il évite ainsi les pièges des journées de 23 et de 25 heures.

@@ -6,29 +6,6 @@ from pathlib import Path
 from ampere import __version__
 
 
-def dashboard_folder(value: str) -> Path:
-    """Check, before the server starts, that the folder holds a built dashboard."""
-    folder = Path(value).absolute()
-    index = folder / "index.html"
-    try:
-        index.read_bytes()  # a small file: reading it proves it is there and readable
-    except FileNotFoundError:
-        raise argparse.ArgumentTypeError(
-            f"no index.html in {folder}: build the dashboard first (npm run build, in web/)"
-        ) from None
-    except OSError as error:
-        raise argparse.ArgumentTypeError(f"cannot read {index}: {error.strerror}") from None
-    if (folder / "package.json").exists():
-        raise argparse.ArgumentTypeError(
-            f"{folder} is the dashboard's source folder: give its build instead, web/dist"
-        )
-    if (folder / "api").exists():
-        raise argparse.ArgumentTypeError(
-            f"{folder / 'api'} must not be in the build: /api belongs to the API"
-        )
-    return folder
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ampere", description=__doc__)
     parser.add_argument("--version", action="version", version=f"ampere {__version__}")
@@ -40,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     api.add_argument("--port", type=int, default=8000)
     api.add_argument(
         "--dashboard",
-        type=dashboard_folder,
+        type=Path,
         metavar="FOLDER",
         help="also serve the built dashboard from this folder, like the deployed demo "
         "(for example web/dist)",
@@ -49,11 +26,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.command == "api":
         # Imported here, so that other commands start fast.
         import uvicorn
 
         from ampere.api import create_app
 
-        uvicorn.run(create_app(dashboard=args.dashboard), host=args.host, port=args.port)
+        try:
+            app = create_app(dashboard=args.dashboard)
+        except ValueError as error:  # a folder that is not the dashboard's build
+            parser.error(f"argument --dashboard: {error}")
+        # One process. Given an app object, uvicorn cannot start more, and without workers=1
+        # it would read their number from WEB_CONCURRENCY, then refuse to start.
+        uvicorn.run(app, host=args.host, port=args.port, workers=1)
