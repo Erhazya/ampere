@@ -11,11 +11,12 @@ commit_tag=$image:sha-$GITHUB_SHA
 
 echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-# An error other than "unknown" (a refused token, for example) stops the job, rather than
-# being taken for a missing tag and overwriting one.
+# A missing tag answers "manifest unknown"; before its first publication, the package itself
+# may answer "denied". The token can write, hence read, the package: "denied" never hides an
+# existing tag, and without the right to write, the push fails. Any other error stops the job.
 if answer=$(docker manifest inspect "$commit_tag" 2>&1); then
   echo "$commit_tag is already published: kept as it is."
-elif grep --quiet --ignore-case --extended-regexp 'manifest unknown|name unknown' <<< "$answer"; then
+elif grep --quiet --ignore-case --extended-regexp 'manifest unknown|name unknown|denied' <<< "$answer"; then
   docker push "$commit_tag"
 else
   echo "Cannot tell whether $commit_tag exists: $answer" >&2
