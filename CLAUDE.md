@@ -55,7 +55,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 ### Déploiement
 
 - La fusion d'une pull request sur `main` déclenche la CI, qui publie l'image sur GHCR (ADR 020). Le serveur regarde chaque minute si cette image a changé, la déploie avec `deploy/compose.yaml`, et la garde si elle devient saine en 120 secondes : la démo est sur https://ampere.146-19-168-222.sslip.io (ADR 021, et ADR 021 du socle).
-- Sur le serveur, en root : `demos 'demo-deploy ampere sha-<commit>'` revient à un commit, avec son empreinte complète (`git rev-parse <commit>`), et `demos 'demo-deploy ampere main'` fait suivre `main` de nouveau. Après la fusion d'un changement de `deploy/compose.yaml`, root le recopie dans `/home/demos/ampere/`.
+- Sur le serveur, en root : `demos 'demo-deploy ampere sha-<commit>'` revient à un commit, avec son empreinte complète (`gh api repos/Erhazya/ampere/commits/<commit> --jq .sha`), et `demos 'demo-deploy ampere main'` fait suivre `main` de nouveau (procédure de retour arrière du socle). Après la fusion d'un changement de `deploy/compose.yaml`, root le copie dans `/etc/demos/ampere/`, puis lance le déploiement à la main et en vérifie le résultat (ADR 021 du socle).
 - Sur le VPS, un minuteur systemd lance le traitement quotidien chaque jour à 14 h, heure de Paris, avec `Persistent=true` (ADR 011).
 - Le développement se fait sur le VPS, dans un compte de développement sans droits d'administration : toutes les commandes du projet (installations, compilations, tests) s'y exécutent, jamais en root (ADR 013 et 014).
 
@@ -84,4 +84,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Incrément 4 terminé : CI GitHub Actions, un job Python et un job tableau de bord (ADR 019).
 - Incrément 5 terminé : image Docker vérifiée sur chaque pull request, publiée sur GHCR depuis `main` (ADR 020).
 - Incrément 7 : démo en ligne depuis le 26 septembre 2026 sur https://ampere.146-19-168-222.sslip.io, déployée par la plateforme du socle ; paquet GHCR public (ADR 021).
-- Prochaine action : vérifier qu'une fusion se déploie seule et tester un retour arrière, puis l'incrément 6, le dépôt public (`TRANSFERT.md`, section 7).
+- Déploiement automatique et retour arrière essayés le 26 septembre 2026 (mesure 8 du socle) ; la mesure définitive suit la fusion suivante.
+- Prochaine action : l'incrément 6, le dépôt public (`TRANSFERT.md`, section 7).
