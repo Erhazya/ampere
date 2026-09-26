@@ -38,6 +38,7 @@ def test_api_command_serves_the_api_alone_on_localhost_by_default(run: Mock) -> 
     run.assert_called_once_with(ANY, host="127.0.0.1", port=8000, workers=1)
     api = TestClient(run.call_args.args[0])
     assert api.get("/api/healthz").status_code == 200
+    assert api.get("/api/docs").status_code == 200
     assert api.get("/").status_code == 404  # no dashboard files
 
 
@@ -45,6 +46,13 @@ def test_api_command_passes_its_options_on(run: Mock, dashboard: Path) -> None:
     cli.main(["api", "--host", "0.0.0.0", "--port", "9000", "--dashboard", str(dashboard)])
     run.assert_called_once_with(ANY, host="0.0.0.0", port=9000, workers=1)
     assert TestClient(run.call_args.args[0]).get("/").status_code == 200
+
+
+def test_no_docs_option_leaves_the_documentation_out(run: Mock) -> None:
+    cli.main(["api", "--no-docs"])
+    api = TestClient(run.call_args.args[0])
+    assert api.get("/api/docs").status_code == 404
+    assert api.get("/api/openapi.json").status_code == 200
 
 
 def remove_index(build: Path) -> None:

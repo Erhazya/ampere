@@ -43,7 +43,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016 et 018).
 - `uv run ampere reproduce` : régénère tous les chiffres du README à partir des données brutes archivées.
 - `docker build --file deploy/Dockerfile --tag ampere .`, à la racine, puis `deploy/smoke-test.sh ampere` : construit l'image de la démo et vérifie qu'un conteneur démarre et répond (ADR 020).
-- `DEMO_IMAGE=ampere DEMO_PORT=8101 docker compose --file deploy/compose.yaml up --wait` : démarre cette image avec les réglages de la démo en ligne (ADR 021).
+- `deploy/compose-test.sh ampere` : démarre cette image avec `deploy/compose.yaml`, les réglages de la démo en ligne, la vérifie, puis l'arrête (ADR 021). Il prend le port 18101 : sur ce serveur, le port 8101 et les suivants appartiennent aux démos en ligne.
 
 ### Tests et qualité (les mêmes en CI, sur chaque pull request et chaque push vers `main` ; ADR 019)
 
@@ -54,8 +54,8 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Déploiement
 
-- La fusion d'une pull request sur `main` déclenche la CI, qui publie l'image sur GHCR (ADR 020). Dans la minute qui suit, le serveur la déploie avec `deploy/compose.yaml` : la démo est sur https://ampere.146-19-168-222.sslip.io (ADR 021, et ADR 021 du socle).
-- Sur le serveur, en root : `demos 'demo-deploy ampere sha-<commit>'` revient à un commit, et `demos 'demo-deploy ampere main'` fait suivre `main` de nouveau. Après la fusion d'un changement de `deploy/compose.yaml`, root le recopie dans `/home/demos/ampere/`.
+- La fusion d'une pull request sur `main` déclenche la CI, qui publie l'image sur GHCR (ADR 020). Le serveur regarde chaque minute si cette image a changé, la déploie avec `deploy/compose.yaml`, et la garde si elle devient saine en 120 secondes : la démo est sur https://ampere.146-19-168-222.sslip.io (ADR 021, et ADR 021 du socle).
+- Sur le serveur, en root : `demos 'demo-deploy ampere sha-<commit>'` revient à un commit, avec son empreinte complète (`git rev-parse <commit>`), et `demos 'demo-deploy ampere main'` fait suivre `main` de nouveau. Après la fusion d'un changement de `deploy/compose.yaml`, root le recopie dans `/home/demos/ampere/`.
 - Sur le VPS, un minuteur systemd lance le traitement quotidien chaque jour à 14 h, heure de Paris, avec `Persistent=true` (ADR 011).
 - Le développement se fait sur le VPS, dans un compte de développement sans droits d'administration : toutes les commandes du projet (installations, compilations, tests) s'y exécutent, jamais en root (ADR 013 et 014).
 

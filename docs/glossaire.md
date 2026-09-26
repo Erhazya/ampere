@@ -132,7 +132,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **LTTB (*Largest-Triangle-Three-Buckets*)** : méthode de sous-échantillonnage qui réduit une longue série à quelques centaines de points en gardant sa forme visuelle, pics et creux compris. Elle rend les graphiques rapides sans les déformer.
 
-**Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en lance un chaque minute pour déployer les nouvelles images (ADR 021).
+**Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute (ADR 021).
 
 **Origine** : ce qui identifie le site d'une page pour le navigateur : le protocole, le nom et le port, par exemple `https://ampere.exemple:443`. Par sécurité, une page ne peut lire que les réponses de sa propre origine, sauf autorisation CORS.
 
@@ -144,12 +144,12 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Réanalyse** : reconstitution de la météo passée par un modèle qui intègre toutes les observations disponibles (stations, satellites, ballons). C'est la « météo observée » la plus complète et la plus homogène ; ERA5 en est l'exemple le plus connu.
 
-**Relais (*reverse proxy*)** : serveur qui reçoit les requêtes à la place d'un autre et les lui transmet. En développement, le serveur de Vite relaie `/api/…` vers l'API, si bien que le navigateur ne voit qu'une origine. En ligne, Caddy joue ce rôle : il tient le certificat HTTPS, ajoute les en-têtes de sécurité et relaie les visiteurs vers le conteneur de l'API, qui n'écoute que sur 127.0.0.1 (ADR 021).
+**Relais (*reverse proxy*)** : serveur qui reçoit les requêtes à la place d'un autre et les lui transmet. En développement, le serveur de Vite relaie `/api/…` vers l'API, si bien que le navigateur ne voit qu'une origine. En ligne, Caddy joue ce rôle : il tient le certificat HTTPS, ajoute les en-têtes de sécurité et relaie les visiteurs vers le port de l'API, publié sur 127.0.0.1 seulement (ADR 021).
 
-**Retour arrière** (*rollback*) : remettre en ligne une version précédente. Chaque image publiée garde l'étiquette de son commit, `sha-<commit>`, qui ne bouge jamais : revenir à ce commit, c'est redéployer cette image (ADR 021).
+**Retour arrière** (*rollback*) : remettre en ligne une version précédente. Chaque image publiée garde l'étiquette de son commit, `sha-<commit>`, avec l'empreinte complète du commit, et cette étiquette ne bouge jamais : revenir à ce commit, c'est redéployer cette image (ADR 021).
 
 **Run (d'un modèle météo)** : une exécution complète d'un modèle de prévision, lancée à heure fixe (par exemple à 00 h UTC). Chaque run produit une prévision pour les jours suivants ; il n'est disponible que quelques heures après son lancement.
 
-**Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018).
+**Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018). La démo en ligne ne sert que le schéma : ces pages chargent leurs scripts depuis un CDN (ADR 021).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke toutes les dates en UTC et ne les convertit en heure de Paris qu'à l'affichage. Il évite ainsi les pièges des journées de 23 et de 25 heures.

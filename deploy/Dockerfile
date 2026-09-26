@@ -48,4 +48,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --start-interval=2s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
 # Every interface of the container; the deployment decides which host address to publish on.
-CMD ["ampere", "api", "--host", "0.0.0.0", "--port", "8000", "--dashboard", "/app/dashboard"]
+# No documentation pages: they load their scripts from a CDN, which the demo's CSP refuses (ADR 021).
+CMD ["ampere", "api", "--host", "0.0.0.0", "--port", "8000", "--dashboard", "/app/dashboard", "--no-docs"]
