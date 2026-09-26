@@ -59,7 +59,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Conventions du projet
 
-- **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request.
+- **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request. Le dépôt a `core.fileMode` à `false`, à cause des ACL du VPS : un script se rend exécutable dans Git avec `git update-index --chmod=+x <fichier>`.
 - **Temps** : dates stockées en UTC, pas de 15 min, heure de Paris seulement à l'affichage.
 - **Période de test** (1er juillet 2025 au 30 juin 2026) : jamais utilisée hors de l'évaluation finale (ADR 007).
 - **Données** : les données brutes sont conservées telles que reçues, avec leur date de réception ; aucun trou n'est comblé en silence.
