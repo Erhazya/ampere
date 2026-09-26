@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 25 septembre 2026 (étape 1, ADR 018).
+> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 019).
 
 ## Énergie et marché de l'électricité
 
@@ -84,11 +84,15 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
+**Empreinte d'une action** : identifiant (SHA) du commit exact d'une action GitHub. Désigner l'action par son empreinte plutôt que par une étiquette comme `v7`, que son auteur peut déplacer, garantit que le code exécuté ne change pas sans une mise à jour visible, proposée par Dependabot (ADR 019).
+
 **Fichiers statiques** : fichiers envoyés tels quels au navigateur, sans calcul côté serveur : le HTML, le JavaScript, les styles, les polices. `npm run build` produit ceux du tableau de bord dans `web/dist/`, et en ligne l'API les sert (ADR 018).
 
 **Hook (React)** : fonction qui donne à un composant un état, ou qui lui fait lancer un effet : un appel réseau, un minuteur. `useApiHealth` en est un : il interroge l'API, puis de nouveau 30 secondes après chaque réponse, et renvoie ce qu'il sait.
 
 **Idempotent** : se dit d'une opération qu'on peut relancer sans changer le résultat. Par exemple, ingérer deux fois la même journée ne crée pas de doublon.
+
+**Intégration continue (CI)** : contrôles lancés automatiquement, sur une machine neuve, à chaque modification proposée. Ici, un workflow GitHub Actions, un fichier de `.github/workflows/`, fait tourner à chaque pull request les mêmes commandes qu'en développement, dans deux jobs : un pour le Python, un pour le tableau de bord (ADR 019).
 
 **Jumeau numérique** : modèle informatique d'un système réel, soumis aux mêmes conditions que lui, qui permet de tester des décisions sans toucher au monde réel.
 

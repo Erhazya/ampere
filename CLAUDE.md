@@ -32,7 +32,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Installation
 
-- Prérequis, dans le compte de développement du VPS (ADR 013 et 014) : Git, uv (qui installe lui-même Python 3.13), Node.js 24 par fnm, et Docker en mode rootless.
+- Prérequis, dans le compte de développement du VPS (ADR 013 et 014) : Git, uv (qui installe lui-même Python 3.13), Node.js 24 par fnm, et Docker en mode rootless. Les versions sont fixées dans le dépôt : `.python-version`, `web/.node-version` et `required-version` dans `pyproject.toml` (ADR 019).
 - `uv sync` : crée l'environnement Python et installe les versions exactes de `uv.lock`.
 - `npm ci`, dans `web/` : installe les versions exactes de `package-lock.json` pour le tableau de bord (ADR 015).
 
@@ -43,7 +43,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016 et 018).
 - `uv run ampere reproduce` : régénère tous les chiffres du README à partir des données brutes archivées.
 
-### Tests et qualité (les mêmes en CI, à chaque push)
+### Tests et qualité (les mêmes en CI, sur chaque pull request et chaque push vers `main` ; ADR 019)
 
 - `uv run pytest` : tests Python (bilan énergétique, tarifs, changements d'heure, données, non-régression).
 - `uv run ruff format --check .` puis `uv run ruff check .` : formatage et analyse statique.
@@ -78,4 +78,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Incréments 1 (squelette Python) et 2 (API minimale) terminés.
 - Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma.
 - Ensuite, l'API déclare ses routes sous `/api` et, en ligne, sert aussi les fichiers du tableau de bord (ADR 018).
-- Prochaine action : l'incrément 4, la CI GitHub Actions (`TRANSFERT.md`, section 7).
+- Incrément 4 terminé : CI GitHub Actions, un job Python et un job tableau de bord (ADR 019).
+- Prochaine action : l'incrément 5, les images Docker publiées sur GHCR (`TRANSFERT.md`, section 7).
