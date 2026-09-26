@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 019).
+> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 020).
 
 ## Énergie et marché de l'électricité
 
@@ -74,6 +74,10 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
 
+**Construction en plusieurs étapes** (*multi-stage build*) : un Dockerfile qui enchaîne plusieurs images. Les premières construisent, avec leurs outils (Node, uv), et la dernière ne reçoit que le résultat : l'image publiée ne contient ni compilateur ni outil de build (ADR 020).
+
+**Conteneur, image Docker** : une image est un paquet qui contient un programme et tout ce qu'il lui faut pour tourner : Python, les bibliothèques, les fichiers. Un conteneur est cette image en train de tourner, isolée du reste du serveur. Un Dockerfile décrit comment construire l'image (ADR 020).
+
 **Contrôle obligatoire** : statut de la CI qui doit être vert pour qu'une pull request puisse être fusionnée. Sur un compte GitHub gratuit, seul un dépôt public peut en imposer (ADR 019).
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
@@ -84,13 +88,19 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Dépendance (FastAPI)** : fonction que FastAPI exécute avant de répondre, déclarée avec `Depends`. Celle du routeur des fichiers du tableau de bord pose l'en-tête `Cache-Control` sur chaque fichier servi (ADR 018).
 
+**Docker rootless** : Docker dont le démon tourne sous un compte ordinaire, sans droits d'administration. Le compte de développement du VPS s'en sert pour essayer les images avant un push, sans jamais toucher au Docker du système, dont l'accès équivaut à root (ADR 014 et 020).
+
 **Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception.
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
 **Empreinte d'une action** : identifiant (SHA) du commit exact d'une action GitHub. Désigner l'action par son empreinte plutôt que par une étiquette comme `v7`, que son auteur peut déplacer, garantit que le code de l'action ne change pas sans une mise à jour visible, proposée par Dependabot. Les outils que l'action télécharge ont leur propre version : la CI fixe celle de uv et vérifie sa somme SHA-256 (ADR 019).
 
+**Essai de fumée** (*smoke test*) : vérification rapide qu'un programme démarre et répond, avant des tests plus poussés. `deploy/smoke-test.sh` démarre un conteneur de l'image et interroge l'API et le tableau de bord (ADR 020).
+
 **Fichiers statiques** : fichiers envoyés tels quels au navigateur, sans calcul côté serveur : le HTML, le JavaScript, les styles, les polices. `npm run build` produit ceux du tableau de bord dans `web/dist/`, et en ligne l'API les sert (ADR 018).
+
+**GHCR** (*GitHub Container Registry*) : le registre d'images Docker de GitHub. La CI y publie l'image de la démo, que le serveur télécharge pour la faire tourner (ADR 020).
 
 **Hook (React)** : fonction qui donne à un composant un état, ou qui lui fait lancer un effet : un appel réseau, un minuteur. `useApiHealth` en est un : il interroge l'API, puis de nouveau 30 secondes après chaque réponse, et renvoie ce qu'il sait.
 
