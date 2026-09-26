@@ -1,6 +1,6 @@
 # ADR 016 : accès du tableau de bord à l'API, même origine et préfixe /api
 
-- **Statut** : acceptée
+- **Statut** : acceptée ; en partie remplacée par l'[ADR 018](018-routes-de-l-api-sous-api.md). L'API déclare désormais elle-même ses routes sous `/api`, le relais de Vite ne retire plus le préfixe, et en ligne l'API sert aussi les fichiers du tableau de bord.
 - **Date** : 25 septembre 2026
 
 ## Contexte

@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée à l'étape 1 (ADR 012 à 017).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée à l'étape 1 (ADR 012 à 018).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 
@@ -413,7 +413,7 @@ Tout le traitement des données est écrit en Python ; le tableau de bord, en Ty
 |---|---|
 | VPS, session de développement (ADR 013) | Développement, entraînements, mise au point, évaluation finale sur la période de test, précalcul des scénarios, notebooks |
 | GitHub Actions | CI à chaque push (formatage, analyse statique, tests, build), construction des images Docker publiées sur GHCR, déploiement |
-| VPS | Traitement quotidien (ADR 011), API, fichiers du tableau de bord ; plus tard, l'assistant chargé à la demande |
+| VPS | Traitement quotidien (ADR 011), API, qui sert aussi les fichiers du tableau de bord (ADR 018) ; plus tard, l'assistant chargé à la demande |
 
 Les modèles entraînés sont livrés au traitement quotidien sous forme de fichiers versionnés. Le mode de livraison sera choisi à l'étape 5.
 
@@ -444,7 +444,7 @@ Le traitement est idempotent : le relancer ne change rien. L'option `Persistent`
 | Composant | Mémoire visée | Présence |
 |---|---|---|
 | API (FastAPI + DuckDB) | 400 Mo au plus | permanente |
-| Tableau de bord | quasi nulle | fichiers statiques servis par le reverse proxy |
+| Tableau de bord | quasi nulle | fichiers statiques servis par l'API (ADR 018) |
 | Traitement quotidien | 1 Go au plus | quelques minutes par jour |
 | Assistant (plus tard) | 2 Go au plus | à la demande, jamais pendant le traitement quotidien |
 
@@ -502,8 +502,9 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [013](decisions/013-developpement-sur-le-vps.md) | Développement sur le VPS, une fois sécurisé | Acceptée |
 | [014](decisions/014-environnement-de-developpement-sur-le-vps.md) | Environnement de développement : uv, fnm et Docker rootless dans le compte de développement | Acceptée |
 | [015](decisions/015-outils-du-tableau-de-bord.md) | Outils du tableau de bord : npm, ESLint et Prettier, Vitest et Testing Library | Acceptée |
-| [016](decisions/016-acces-du-tableau-de-bord-a-l-api.md) | Le tableau de bord appelle l'API sous `/api`, sur la même origine | Acceptée |
+| [016](decisions/016-acces-du-tableau-de-bord-a-l-api.md) | Le tableau de bord appelle l'API sous `/api`, sur la même origine | En partie remplacée par 018 |
 | [017](decisions/017-styles-du-tableau-de-bord-css-modules.md) | Styles du tableau de bord en CSS Modules | Acceptée |
+| [018](decisions/018-routes-de-l-api-sous-api.md) | L'API sert ses routes sous `/api` et, en ligne, les fichiers du tableau de bord | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 

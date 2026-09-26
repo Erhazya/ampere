@@ -39,8 +39,8 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 ### Lancement en local (noms à confirmer)
 
 - `uv run ampere daily` : traitement quotidien complet (ingestion avec rattrapage, contrôles, simulation, prévision, export).
-- `uv run ampere api` : lance l'API FastAPI.
-- `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016).
+- `uv run ampere api` : lance l'API FastAPI sur `127.0.0.1:8000`, avec ses routes sous `/api`. Avec `--dashboard web/dist`, elle sert aussi le tableau de bord construit, comme en ligne (ADR 018).
+- `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016 et 018).
 - `uv run ampere reproduce` : régénère tous les chiffres du README à partir des données brutes archivées.
 
 ### Tests et qualité (les mêmes en CI, à chaque push)
@@ -76,4 +76,6 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
   - Dépôt GitHub privé jusqu'à la fin de l'étape 1, puis public.
   - Le brief, les prompts et `TRANSFERT.md` restent locaux, ignorés par Git.
 - Incréments 1 (squelette Python) et 2 (API minimale) terminés.
-- Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma. Prochaine action : l'incrément 4, la CI GitHub Actions (`TRANSFERT.md`, section 7).
+- Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma.
+- Ensuite, l'API déclare ses routes sous `/api` et, en ligne, sert aussi les fichiers du tableau de bord (ADR 018).
+- Prochaine action : l'incrément 4, la CI GitHub Actions (`TRANSFERT.md`, section 7).
