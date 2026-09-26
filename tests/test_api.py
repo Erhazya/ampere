@@ -55,6 +55,15 @@ def test_documentation_is_served_under_api(client: TestClient) -> None:
         assert client.get(path).status_code == 404
 
 
+def test_documentation_can_be_left_out() -> None:
+    # The online demo leaves it out (ADR 021): its two pages load their scripts from a CDN.
+    with TestClient(create_app(docs=False)) as api:
+        for path in ["/api/docs", "/api/redoc"]:
+            assert api.get(path).status_code == 404
+        # The schema stays public.
+        assert api.get("/api/openapi.json").status_code == 200
+
+
 def test_serves_only_the_api_without_a_dashboard_folder(client: TestClient) -> None:
     assert client.get("/").status_code == 404
 

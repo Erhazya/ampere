@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 020).
+> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 021).
 
 ## Énergie et marché de l'électricité
 
@@ -78,6 +78,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
 
+**Compose (Docker Compose)** : fichier, `compose.yaml`, qui décrit comment lancer les conteneurs d'une application : l'image, le port publié, les limites, les options de sécurité. `docker compose up` crée les conteneurs, ou recrée seulement ceux dont la description a changé. Celui d'Ampère décrit la démo en ligne (ADR 021).
+
 **Construction en plusieurs étapes** (*multi-stage build*) : un Dockerfile qui enchaîne plusieurs images. Les premières construisent, avec leurs outils (Node, uv), et la dernière reprend le résultat sans ces outils : l'image publiée ne contient ni Node ni uv (ADR 020).
 
 **Conteneur, image Docker** : une image réunit un programme et tout ce dont il a besoin pour tourner, de l'interpréteur Python aux fichiers du tableau de bord. Un conteneur est cette image en train de tourner, isolée du reste du serveur. Un Dockerfile décrit comment construire l'image (ADR 020).
@@ -88,21 +90,27 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
+**CSP** (*Content Security Policy*) : en-tête HTTP qui dit au navigateur d'où une page peut charger ses scripts, ses styles, ses polices et ses images. En ligne, le tableau de bord n'a droit qu'aux fichiers de son propre site : un script venu d'ailleurs ne s'exécuterait pas (ADR 021).
+
 **CSS Modules** : fichiers CSS rattachés à un composant, dont l'outil de construction rend les noms de classes uniques. Deux composants peuvent ainsi avoir chacun une classe `.card` sans se gêner (ADR 017).
 
 **Dependabot** : service de GitHub qui propose par des pull requests les mises à jour des dépendances. Ici, il passe chaque semaine sur les paquets Python (uv), ceux du tableau de bord (npm), les actions des workflows et les images de base du Dockerfile (`.github/dependabot.yml`).
 
 **Dépendance (FastAPI)** : fonction que FastAPI exécute avant de répondre, déclarée avec `Depends`. Celle du routeur des fichiers du tableau de bord pose l'en-tête `Cache-Control` sur chaque fichier servi (ADR 018).
 
+**Déploiement tiré** (mode *pull*) : c'est le serveur qui va chercher la nouvelle version, au lieu que la CI la lui envoie. Chaque minute, il regarde si l'image `main` a changé sur GHCR, et la déploie si c'est le cas. GitHub n'a ainsi aucun accès au serveur (ADR 021).
+
 **Distroless** : famille d'images Docker de Google sans shell ni gestionnaire de paquets, réduites au programme et à ses bibliothèques (ADR 020).
 
-**Docker rootless** : Docker dont le démon tourne sous un compte ordinaire, sans droits d'administration. Le compte de développement du VPS s'en sert pour essayer les images avant un push, sans jamais toucher au Docker du système, dont l'accès équivaut à root (ADR 014 et 020).
+**Docker rootless** : Docker dont le démon tourne sous un compte ordinaire, sans droits d'administration. Le compte de développement du VPS s'en sert pour essayer les images avant un push, sans jamais toucher au Docker du système, dont l'accès équivaut à root (ADR 014 et 020). La démo en ligne tourne de la même façon, sous le compte `demos` de la plateforme du portfolio (ADR 021).
 
 **Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception.
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
 **Empreinte** (SHA) : identifiant calculé à partir du contenu exact d'un objet, comme le commit d'une action GitHub ou une image Docker. Désigner l'action ou l'image par son empreinte plutôt que par une étiquette comme `v7` ou `3.13-slim`, que son auteur peut déplacer, garantit que ce qui tourne ne change pas sans une mise à jour visible, proposée par Dependabot. Les outils qu'une action télécharge ont leur propre version : la CI fixe celle de uv et vérifie sa somme SHA-256 (ADR 019 et 020).
+
+**En-têtes transmis** (`X-Forwarded-For`, `X-Forwarded-Proto`) : en-têtes par lesquels le relais indique à l'API l'adresse du visiteur et le protocole de sa requête. uvicorn ne les croit que s'ils viennent d'une adresse listée dans `FORWARDED_ALLOW_IPS`. Sans eux, ses redirections partiraient en HTTP (ADR 021).
 
 **Essai de fumée** (*smoke test*) : vérification rapide qu'un programme démarre et répond, avant des tests plus poussés. `deploy/smoke-test.sh` démarre un conteneur de l'image et interroge l'API et le tableau de bord (ADR 020).
 
@@ -124,7 +132,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **LTTB (*Largest-Triangle-Three-Buckets*)** : méthode de sous-échantillonnage qui réduit une longue série à quelques centaines de points en gardant sa forme visuelle, pics et creux compris. Elle rend les graphiques rapides sans les déformer.
 
-**Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur.
+**Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute (ADR 021).
 
 **Origine** : ce qui identifie le site d'une page pour le navigateur : le protocole, le nom et le port, par exemple `https://ampere.exemple:443`. Par sécurité, une page ne peut lire que les réponses de sa propre origine, sauf autorisation CORS.
 
@@ -136,10 +144,12 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Réanalyse** : reconstitution de la météo passée par un modèle qui intègre toutes les observations disponibles (stations, satellites, ballons). C'est la « météo observée » la plus complète et la plus homogène ; ERA5 en est l'exemple le plus connu.
 
-**Relais (*reverse proxy*)** : serveur qui reçoit les requêtes à la place d'un autre et les lui transmet. En développement, le serveur de Vite relaie `/api/…` vers l'API, si bien que le navigateur ne voit qu'une origine.
+**Relais (*reverse proxy*)** : serveur qui reçoit les requêtes à la place d'un autre et les lui transmet. En développement, le serveur de Vite relaie `/api/…` vers l'API, si bien que le navigateur ne voit qu'une origine. En ligne, Caddy joue ce rôle : il tient le certificat HTTPS, ajoute les en-têtes de sécurité et relaie les visiteurs vers le port de l'API, publié sur 127.0.0.1 seulement (ADR 021).
+
+**Retour arrière** (*rollback*) : remettre en ligne une version précédente. Chaque image publiée garde l'étiquette de son commit, `sha-<commit>`, avec l'empreinte complète du commit, et cette étiquette ne bouge jamais : revenir à ce commit, c'est redéployer cette image (ADR 021).
 
 **Run (d'un modèle météo)** : une exécution complète d'un modèle de prévision, lancée à heure fixe (par exemple à 00 h UTC). Chaque run produit une prévision pour les jours suivants ; il n'est disponible que quelques heures après son lancement.
 
-**Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018).
+**Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018). La démo en ligne ne sert que le schéma : ces pages chargent leurs scripts depuis un CDN (ADR 021).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke toutes les dates en UTC et ne les convertit en heure de Paris qu'à l'affichage. Il évite ainsi les pièges des journées de 23 et de 25 heures.

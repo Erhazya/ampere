@@ -2,7 +2,7 @@
 
 A digital twin of a 200-house neighbourhood's energy, fed with real public French data.
 
-> **Status: work in progress.** The design is done and the foundations are being built. There is no demo yet.
+> **Status: work in progress.** The design is done and the foundations are being built. A first skeleton is online at <https://ampere.146-19-168-222.sslip.io>: for now, it only shows whether the API answers.
 
 [Version française](README.fr.md)
 

@@ -46,14 +46,18 @@ def revalidate(request: Request, response: Response) -> None:
         response.headers["cache-control"] = "no-cache"
 
 
-def create_app(dashboard: Path | None = None) -> FastAPI:
-    """Build the API. Given the folder of the built dashboard, serve its files too."""
+def create_app(dashboard: Path | None = None, *, docs: bool = True) -> FastAPI:
+    """Build the API. Given the folder of the built dashboard, serve its files too.
+
+    With docs=False, the two documentation pages are left out: they load their scripts from a
+    CDN, which the online demo does not allow (ADR 021). The schema stays.
+    """
     app = FastAPI(
         title="Ampère",
         version=__version__,
         openapi_url="/api/openapi.json",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
+        docs_url="/api/docs" if docs else None,
+        redoc_url="/api/redoc" if docs else None,
         # This page only completes OAuth2 logins from the documentation, and the API has none.
         swagger_ui_oauth2_redirect_url=None,
     )

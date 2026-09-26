@@ -1,0 +1,27 @@
+# The online demo (ADR 021): the API, which also serves the dashboard (ADR 018 and 020).
+# The socle's demo platform runs it and sets two variables: DEMO_IMAGE, the image to run, named by
+# its digest, and DEMO_PORT, the port on 127.0.0.1 to which its proxy forwards the demo's address.
+services:
+  api:
+    image: ${DEMO_IMAGE:?set by the demo platform}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEMO_PORT:?set by the demo platform}:8000"
+    environment:
+      # uvicorn applies X-Forwarded-For and X-Forwarded-Proto only from these addresses. The
+      # proxy's connections reach the container from the gateway of its Docker network.
+      FORWARDED_ALLOW_IPS: 172.16.0.0/12
+    # 33 MB at rest: the limits leave room, and a leak stops at them instead of the neighbours.
+    mem_limit: 256m
+    # As much as mem_limit, so no swap: past 256 MB, the API restarts instead of slowing down.
+    memswap_limit: 256m
+    cpus: 1
+    pids_limit: 64
+    # The API writes nothing outside /tmp, and needs no capability nor any gain of privileges.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

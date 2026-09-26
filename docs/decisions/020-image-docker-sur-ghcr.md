@@ -1,6 +1,6 @@
 # ADR 020 : image Docker de la démo, construite par la CI et publiée sur GHCR
 
-- **Statut** : acceptée ; complète les ADR 014, 018 et 019
+- **Statut** : acceptée ; complète les ADR 014, 018 et 019. Complétée par l'[ADR 021](021-demo-en-ligne.md) : le paquet est public depuis le 26 septembre 2026, avant le dépôt, et la commande de l'image laisse de côté les pages de documentation (`--no-docs`)
 - **Date** : 26 septembre 2026
 
 ## Contexte

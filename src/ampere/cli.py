@@ -22,6 +22,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="also serve the built dashboard from this folder, like the deployed demo "
         "(for example web/dist)",
     )
+    api.add_argument(
+        "--no-docs",
+        dest="docs",
+        action="store_false",
+        help="leave out the documentation pages, /api/docs and /api/redoc, like the deployed "
+        "demo; the schema stays at /api/openapi.json",
+    )
     return parser
 
 
@@ -35,7 +42,7 @@ def main(argv: list[str] | None = None) -> None:
         from ampere.api import create_app
 
         try:
-            app = create_app(dashboard=args.dashboard)
+            app = create_app(dashboard=args.dashboard, docs=args.docs)
         except ValueError as error:  # a folder that is not the dashboard's build
             parser.error(f"argument --dashboard: {error}")
         # One process. Given an app object, uvicorn cannot start more, and without workers=1
