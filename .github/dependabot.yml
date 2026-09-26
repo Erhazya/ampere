@@ -23,6 +23,11 @@ updates:
     commit-message:
       prefix: build
       include: scope
+    ignore:
+      # The dashboard runs on Node.js 24: the types of a newer Node would accept functions that
+      # do not exist at run time (ADR 019).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /deploy
     schedule:
