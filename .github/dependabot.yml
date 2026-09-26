@@ -1,5 +1,5 @@
-# Weekly update pull requests for the actions of the workflows, the Python packages (uv)
-# and the dashboard's packages (npm).
+# Weekly update pull requests for the actions of the workflows, the Python packages (uv),
+# the dashboard's packages (npm) and the base images of deploy/Dockerfile (docker).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -23,3 +23,19 @@ updates:
     commit-message:
       prefix: build
       include: scope
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    ignore:
+      # Node and Python keep the versions of web/.node-version and .python-version: only
+      # new builds of the same tags come through, with their security fixes (ADR 020).
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # uv changes by hand, in the Dockerfile, ci.yml and the development account at once.
+      - dependency-name: "*astral-sh/uv"
