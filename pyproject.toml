@@ -21,6 +21,10 @@ ampere = "ampere.cli:main"
 requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.uv]
+# The uv version for development and CI (ADR 019): uv refuses to run outside this range.
+required-version = ">=0.12.18,<0.13"
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

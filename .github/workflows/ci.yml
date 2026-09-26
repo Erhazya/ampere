@@ -1,0 +1,66 @@
+# Runs the project's checks on every pull request and every push to main, with the same
+# commands as in development (CLAUDE.md): one job for the Python code, one for the dashboard.
+# ADR 019.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to a pull request cancels the run it makes outdated; runs on main all finish.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  python:
+    name: Python
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Installs the uv version set by required-version in pyproject.toml.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install the exact versions of uv.lock, and Python from .python-version
+        run: uv sync --locked
+      - name: Formatting (ruff format)
+        run: uv run ruff format --check .
+      - name: Static analysis (ruff check)
+        run: uv run ruff check .
+      - name: Types (mypy, strict)
+        run: uv run mypy src tests
+      - name: Tests (pytest)
+        run: uv run pytest
+
+  dashboard:
+    name: Dashboard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install the exact versions of package-lock.json
+        run: npm ci
+      - name: Formatting (Prettier)
+        run: npm run format:check
+      - name: Static analysis (ESLint)
+        run: npm run lint
+      - name: Tests (Vitest)
+        run: npm run test
+      - name: Types and build (tsc, Vite)
+        run: npm run build
