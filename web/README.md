@@ -14,6 +14,8 @@ Dans ce dossier, sous le compte de développement :
 - `npm run build` : vérifie les types, puis produit les fichiers statiques dans `dist/`.
 - `npm run check` : mise en forme, analyse, tests et build, dans l'ordre de la CI.
 
+La CI prend la version de Node dans `.node-version` (24). En développement, fnm fournit la même version majeure par son alias par défaut (ADR 019).
+
 Pour voir le tableau de bord comme en ligne, servi par l'API : `npm run build`, puis `uv run ampere api --dashboard web/dist` à la racine du dépôt, et http://127.0.0.1:8000 (ADR 018).
 
 ## Organisation

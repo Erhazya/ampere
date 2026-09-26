@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 25 septembre 2026 (étape 1, ADR 018).
+> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 019).
 
 ## Énergie et marché de l'électricité
 
@@ -74,9 +74,13 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
 
+**Contrôle obligatoire** : statut de la CI qui doit être vert pour qu'une pull request puisse être fusionnée. Sur un compte GitHub gratuit, seul un dépôt public peut en imposer (ADR 019).
+
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
 **CSS Modules** : fichiers CSS rattachés à un composant, dont l'outil de construction rend les noms de classes uniques. Deux composants peuvent ainsi avoir chacun une classe `.card` sans se gêner (ADR 017).
+
+**Dependabot** : service de GitHub qui propose par des pull requests les mises à jour des dépendances. Ici, il passe chaque semaine sur les paquets Python (uv), ceux du tableau de bord (npm) et les actions des workflows (`.github/dependabot.yml`).
 
 **Dépendance (FastAPI)** : fonction que FastAPI exécute avant de répondre, déclarée avec `Depends`. Celle du routeur des fichiers du tableau de bord pose l'en-tête `Cache-Control` sur chaque fichier servi (ADR 018).
 
@@ -84,11 +88,15 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
+**Empreinte d'une action** : identifiant (SHA) du commit exact d'une action GitHub. Désigner l'action par son empreinte plutôt que par une étiquette comme `v7`, que son auteur peut déplacer, garantit que le code de l'action ne change pas sans une mise à jour visible, proposée par Dependabot. Les outils que l'action télécharge ont leur propre version : la CI fixe celle de uv et vérifie sa somme SHA-256 (ADR 019).
+
 **Fichiers statiques** : fichiers envoyés tels quels au navigateur, sans calcul côté serveur : le HTML, le JavaScript, les styles, les polices. `npm run build` produit ceux du tableau de bord dans `web/dist/`, et en ligne l'API les sert (ADR 018).
 
 **Hook (React)** : fonction qui donne à un composant un état, ou qui lui fait lancer un effet : un appel réseau, un minuteur. `useApiHealth` en est un : il interroge l'API, puis de nouveau 30 secondes après chaque réponse, et renvoie ce qu'il sait.
 
 **Idempotent** : se dit d'une opération qu'on peut relancer sans changer le résultat. Par exemple, ingérer deux fois la même journée ne crée pas de doublon.
+
+**Intégration continue (CI)** : contrôles lancés automatiquement, sur une machine neuve, à chaque modification proposée. Ici, un workflow GitHub Actions, un fichier de `.github/workflows/`, fait tourner, sur chaque pull request et chaque push vers `main`, les mêmes commandes qu'en développement. Il a deux jobs, c'est-à-dire deux suites d'étapes qui tournent chacune sur sa propre machine : un pour le Python, un pour le tableau de bord (ADR 019).
 
 **Jumeau numérique** : modèle informatique d'un système réel, soumis aux mêmes conditions que lui, qui permet de tester des décisions sans toucher au monde réel.
 
