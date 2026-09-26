@@ -1,6 +1,6 @@
 # ADR 020 : image Docker de la démo, construite par la CI et publiée sur GHCR
 
-- **Statut** : acceptée ; complète les ADR 014, 018 et 019
+- **Statut** : acceptée ; complète les ADR 014, 018 et 019 ; complétée par l'ADR 021
 - **Date** : 26 septembre 2026
 
 ## Contexte

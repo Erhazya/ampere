@@ -2,7 +2,7 @@
 
 Le jumeau numérique énergétique d'un quartier de 200 maisons, alimenté par de vraies données publiques françaises.
 
-> **Statut : en construction.** La conception est terminée et les fondations sont en cours. Il n'y a pas encore de démo.
+> **Statut : en construction.** La conception est terminée et les fondations sont en cours. Un premier squelette est en ligne sur <https://ampere.146-19-168-222.sslip.io> : pour l'instant, il indique seulement si l'API répond.
 
 [English version](README.md)
 
