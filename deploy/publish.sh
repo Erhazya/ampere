@@ -25,8 +25,8 @@ fi
 
 tip=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
 if [[ $tip == "$GITHUB_SHA" ]]; then
-  # The registry copies the commit's manifest under main as it is, without downloading the image:
-  # --prefer-index=false keeps it from wrapping the manifest in an index with its own digest.
+  # buildx pushes the commit's manifest under main as it is, without downloading the layers:
+  # --prefer-index=false keeps it from wrapping the manifest in a new index with its own digest.
   docker buildx imagetools create --prefer-index=false --tag "$image:main" "$commit_tag"
 else
   echo "main has moved on to $tip: the main tag is left to that commit's run."
