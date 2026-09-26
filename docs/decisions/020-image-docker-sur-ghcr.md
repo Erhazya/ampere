@@ -79,7 +79,7 @@ Option 1 dans les trois cas.
   Après un échec, il affiche les journaux du conteneur, et il le supprime dans tous les cas.
 - Le workflow `image.yml` construit l'image et lance cet essai sur chaque pull request, dans le job « Image », sans rien publier. Sur chaque push vers `main`, le job « Publish » fait de même, puis `deploy/publish.sh` publie l'image sur `ghcr.io/erhazya/ampere` :
   - `sha-<commit>` n'est jamais remplacée : si elle existe déjà, par exemple quand le job est relancé, l'image publiée reste ;
-  - `main` ne bouge que si le commit est encore le dernier de `main`, et désigne alors la même image que `sha-<commit>`.
+  - `main` ne bouge que si le commit est encore le dernier de `main`, et désigne alors la même image que `sha-<commit>`, avec la même empreinte.
 
   Seul ce job peut écrire dans GHCR, et il n'utilise aucun cache.
 
