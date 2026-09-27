@@ -240,7 +240,7 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 
 ### 6.2 Fiches
 
-#### RTE éCO2mix
+#### RTE éCO2mix *(ADR 024)*
 
 - **Contenu** : le bilan électrique de la France (consommation, production par filière, échanges, intensité CO₂) et celui de chaque région (consommation, production par filière, taux de charge du solaire).
 - **Accès** : plateforme [ODRÉ](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/), API sans clé. Un quota de 50 000 appels par mois et par utilisateur a été instauré contre les robots trop gourmands ; un appel par jour et par jeu de données nous suffit.
@@ -271,15 +271,16 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 - **Usage** : second point de comparaison pour valider notre calcul solaire.
 - **Piège** : beaucoup de petites installations ne vendent que leur surplus. Leur injection est donc la production moins ce que la maison consomme, ce qui déforme la courbe.
 
-#### Open-Meteo
+#### Open-Meteo *(ADR 025)*
 
 - **Contenu** : une API météo unique qui donne accès à trois types de données.
-  - **Météo observée**, par *réanalyse* : ERA5 (mailles d'environ 25 km, depuis 1940, 5 jours de délai) et le modèle ECMWF IFS (9 km, depuis 2017, sans délai) ([documentation](https://open-meteo.com/en/docs/historical-weather-api)).
+  - **Météo observée** : la *réanalyse* ERA5 (mailles d'environ 25 km, depuis 1940, 5 jours de délai), et une série qu'Open-Meteo assemble à partir des runs du modèle ECMWF IFS (9 km, depuis 2017, sans délai), celle qu'Ampère utilise ([documentation](https://open-meteo.com/en/docs/historical-weather-api)).
   - **Prévisions telles qu'elles ont été émises** : l'API [Previous Runs](https://open-meteo.com/en/docs/previous-runs-api) donne les valeurs prévues 1 à 7 jours avant, archivées depuis janvier 2024 pour la plupart des modèles. L'API [Single Runs](https://open-meteo.com/en/docs/single-runs-api) donne un *run* complet, identifié par son heure de lancement ; celui d'ECMWF IFS est archivé depuis mars 2024.
   - **Prévision du lendemain**, pour le fonctionnement quotidien.
-- **Variables utiles** : température à 2 m ; rayonnement global, direct, diffus et sur plan incliné. Toutes sont au pas horaire.
+- **Variables utiles** : température à 2 m ; rayonnement global, direct, diffus et direct normal ; vent à 10 m. Toutes sont au pas horaire. Le rayonnement sur plan incliné, qu'Open-Meteo calcule pour une seule orientation à la fois, vient de pvlib, toit par toit.
 - **Usage** : entrée du calcul solaire, variables de la prévision de consommation, estimation des jours récents.
 - **Piège majeur, la fuite d'information** : une prévision émise la veille à midi ne doit utiliser que des runs lancés avant midi la veille. Or `previous_day1` donne la valeur prévue 24 h avant l'heure visée : pour l'après-midi du lendemain, elle vient d'un run lancé *après* midi la veille. Il faut donc un run précis (Single Runs), ou des prévisions à 48 h. Ce choix sera tranché dans l'ADR 007.
+- **Pièges de format** : un rayonnement est la moyenne de l'heure qui finit à l'instant donné, alors que la température et le vent sont des valeurs à l'instant ; l'archive complète le jour en cours avec la prévision ; le champ `generationtime_ms` change à chaque appel, même quand les données ne changent pas.
 - **Licence** : CC BY 4.0, source à citer : « Weather data by Open-Meteo.com ». L'API gratuite est réservée à l'usage non commercial, à moins de 10 000 appels par jour ([conditions](https://open-meteo.com/en/terms)). Une démo de portfolio sans publicité ni abonnement entre dans ce cadre.
 
 #### PVGIS
@@ -434,7 +435,7 @@ Le traitement est idempotent : le relancer ne change rien. L'option `Persistent`
 
 - **Trois couches** :
   - **brut**, tel que reçu, jamais modifié, avec la date de réception ;
-  - **nettoyé**, validé, en UTC, au pas de 15 min, avec des unités harmonisées ;
+  - **nettoyé**, validé, en UTC, au pas de 15 min, avec des unités harmonisées ; seule la météo reste au pas horaire, comme publiée (ADR 025) ;
   - **résultats** : simulations, prévisions, indicateurs.
 - **Stockage** : fichiers Parquet, interrogés en SQL avec DuckDB (par l'API, et plus tard par l'assistant).
 - **Volume** : environ 200 maisons × 96 pas × 365 jours × 3 ans, soit une vingtaine de millions de lignes par grandeur simulée. On attend de l'ordre du gigaoctet ; la mesure réelle sera faite à l'étape 3.
@@ -510,6 +511,8 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [021](decisions/021-demo-en-ligne.md) | Démo en ligne, déployée par la plateforme du socle | Acceptée |
 | [022](decisions/022-fondations-des-donnees.md) | Fondations des données : Polars, httpx2, et une couche brute faite des octets reçus | Acceptée |
 | [023](decisions/023-ingestion-des-prix-smard.md) | Ingestion des prix spot de SMARD | Acceptée |
+| [024](decisions/024-ingestion-d-eco2mix.md) | Ingestion d'éCO2mix, de RTE | Acceptée |
+| [025](decisions/025-ingestion-de-la-meteo.md) | Ingestion de la météo d'Open-Meteo | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
