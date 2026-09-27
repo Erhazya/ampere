@@ -100,7 +100,7 @@ Un modèle de substitution (un réseau de neurones qui imite le simulateur, pour
 | Budget de 0 € | Outils libres, offres gratuites (GitHub, GHCR) et sources publiques ; aucune API payante. |
 | Serveur de démo partagé entre cinq projets : VPS Ubuntu 24.04, 4 processeurs virtuels, 8 Go de mémoire, pas de carte graphique. **Ampère dispose de 2,5 Go**, modèle de langage compris. | Le VPS ne fait que des calculs légers : ingestion, prévision avec un modèle déjà entraîné, optimisation du jour, API. Les entraînements et les gros calculs, lancés depuis la session de développement, tournent hors du traitement quotidien, un à la fois et avec des limites (ADR 013). Le modèle de langage n'est chargé que lorsqu'on l'interroge. |
 | Le VPS peut s'arrêter sans prévenir, parfois plusieurs heures (déjà observé). | L'ingestion est idempotente et rattrape les jours manquants au redémarrage ; la surveillance externe est fournie par le socle d'hébergement. |
-| Le socle d'hébergement n'a qu'une plateforme de démos minimale (ADR 021 du socle). | Pour l'instant, un seul conteneur, l'API, dans le Docker rootless de cette plateforme, que le serveur redéploie lui-même à chaque nouvelle image (ADR 021). Le traitement quotidien s'y ajoutera. |
+| Le socle d'hébergement n'a qu'une plateforme de démos minimale (ADR 021 et 022 du socle). | Deux conteneurs dans le Docker rootless de cette plateforme : l'API, que le serveur redéploie lui-même à chaque nouvelle image (ADR 021), et le traitement quotidien, qu'un minuteur du socle lance chaque jour sur la même image (ADR 028). Les données vivent dans un dossier du serveur, en lecture seule pour l'API. |
 | Développement sur le VPS, une fois sécurisé (ADR 013) : pas de carte graphique, et une mémoire partagée avec les démos et d'autres services. | Tous les calculs tournent sur le processeur, ce qui suffit pour LightGBM et un petit agent de renforcement ; les réseaux de neurones restent petits. |
 | Dépôt public. | Aucun secret versionné. En v1, aucune source ne demande de clé (section 6) ; un `.env.example` reste prévu pour les secrets à venir, qui resteront hors du dépôt. |
 | Licences des données. | Chaque source est vérifiée (droit de réutilisation, attribution) avant d'être publiée dans la démo ; les mentions obligatoires apparaissent dans l'interface et le README. |
@@ -518,6 +518,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [025](decisions/025-ingestion-de-la-meteo.md) | Ingestion de la météo d'Open-Meteo | Acceptée |
 | [026](decisions/026-ingestion-d-enedis.md) | Ingestion des courbes d'Enedis | Acceptée |
 | [027](decisions/027-ingestion-des-calendriers.md) | Ingestion des calendriers | Acceptée |
+| [028](decisions/028-traitement-quotidien-en-ligne.md) | Le traitement quotidien en ligne | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
