@@ -42,6 +42,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Vente du surplus** : mode de raccordement où la maison consomme d'abord sa production solaire et ne vend que le reste. Son injection sur le réseau est donc sa production moins sa consommation.
 
+**Zones de vacances scolaires** : la métropole est partagée en trois zones, A, B et C, dont les vacances d'hiver et de printemps sont décalées d'une ou deux semaines, pour étaler les départs. Lyon est en zone A, avec sept autres académies qui ont les mêmes vacances (ADR 027).
+
 ## Prévision et évaluation
 
 **Couverture d'un intervalle** : un intervalle de prévision à 80 % doit contenir la valeur réelle 80 % du temps. La couverture mesurée indique si l'incertitude annoncée est honnête.

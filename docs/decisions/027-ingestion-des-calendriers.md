@@ -50,7 +50,7 @@ La prévision du lendemain, émise la veille à 11 h, utilise le calendrier : jo
 
 Option 1 dans les quatre cas.
 
-- **Requêtes** : à chaque passage, les jours fériés de métropole en JSON, puis l'export Parquet du calendrier scolaire (`/api/explore/v2.1/catalog/datasets/fr-en-calendrier-scolaire/exports/parquet`), de 1 Mo au plus chacun, séparés d'une pause de 0,5 s. Dans le brut, la source est `calendars`, les jeux `public_holidays` et `school_holidays`. `--full` n'y change rien.
+- **Requêtes** : à chaque passage, les jours fériés de métropole en JSON, puis l'export Parquet du calendrier scolaire (`/api/explore/v2.1/catalog/datasets/fr-en-calendrier-scolaire/exports/parquet`), de 1 Mo au plus chacun, séparés d'une pause de 0,5 s. Dans le brut, la source est `calendars`, les jeux `public-holidays` et `school-holidays`. `--full` n'y change rien.
 - **Schéma** :
   - les jours fériés sont un objet dont chaque clé est une date et chaque valeur un nom non vide ;
   - le calendrier scolaire est un Parquet lisible, borné par son pied à 10 000 lignes et 20 colonnes, avec les colonnes attendues et leurs types. Ampère garde les lignes de l'académie de Lyon pour les élèves (population « Élèves » ou « - ») : si les zones changent un jour, le calendrier suit Lyon. Chaque période commence et finit à un minuit de Paris, ne finit pas avant de commencer, et n'en chevauche aucune autre.
@@ -71,3 +71,4 @@ Option 1 dans les quatre cas.
 - L'historique de 2023 à 2026 utilise des calendriers reçus en 2026. Ils sont fixés plusieurs années à l'avance, par arrêté pour les vacances : la prévision n'y apprend rien qu'elle n'aurait pu savoir la veille.
 - Le lundi de Pentecôte est un jour férié pour l'API, mais beaucoup y travaillent : la prévision en jugera l'effet sur les données.
 - Les autres zones restent dans le brut : un modèle national pourra les lire sans nouvelle requête.
+- La Licence Ouverte demande de citer la source et la date de sa dernière mise à jour : l'interface et le README citeront « Éducation nationale, calendrier scolaire » et « Etalab, jours fériés ».
