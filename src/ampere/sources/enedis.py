@@ -275,8 +275,8 @@ def ingest(
         try:
             published = publications[dataset.name] = parse_publication(content, receipt.url)
         except SchemaError as error:
-            # Without the date of the publication, only the months without a readable response
-            # are asked for.
+            # Without the date of the publication, the months are asked for as on an ordinary
+            # day.
             report.errors.append(str(error))
         else:
             # A publication seen to replace another opens the window at its first reception;

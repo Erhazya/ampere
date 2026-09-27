@@ -678,6 +678,9 @@ def test_a_month_enedis_no_longer_publishes_keeps_its_last_version(
     assert homes["start"].min() == paris(2026, 4, 1)
     april_values = homes.filter(pl.col("start") == paris(2026, 4, 12))
     assert april_values["received_at"].unique().to_list() == [NOW]
+    fake.requests.clear()
+    assert run(fake, store, clean, now=LATER + timedelta(days=8)) == Report()
+    assert asked(fake) == METADATA
 
 
 def test_an_empty_month_between_published_ones_is_a_warning_and_asked_again(
@@ -728,13 +731,14 @@ def test_a_damaged_month_is_asked_again_outside_the_7_days(
     fake.published = dict.fromkeys(fake.published, REVISED)
     fake.revision = 1.0
     run(fake, store, clean, now=LATER)
-    may = [r for r in store.receipts("enedis") if (r.dataset, r.request) == ("solar", "2026-05")]
-    assert len(may) == 2
-    (store.root / may[-1].path).write_bytes(b"damaged")
+    # June, the last month published: unreadable is not empty, even at the end of the window.
+    june = [r for r in store.receipts("enedis") if (r.dataset, r.request) == ("solar", "2026-06")]
+    assert len(june) == 2
+    (store.root / june[-1].path).write_bytes(b"damaged")
     fake.requests.clear()
     report = run(fake, store, clean, now=LATER + timedelta(days=8))
     # The last response is the one that counts, although the one before still reads.
-    assert asked(fake) == [*METADATA, "prod-region 2026-05"]
+    assert asked(fake) == [*METADATA, "prod-region 2026-06"]
     # The damaged file comes back whole from an identical response.
     assert report == Report()
     assert store.verify("enedis") == []
@@ -760,22 +764,27 @@ def test_a_damaged_older_response_is_left_aside(
     )
 
 
-def test_a_faulty_month_is_an_error_and_the_older_response_serves(
+def test_a_faulty_month_is_an_error_and_the_latest_readable_response_serves(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     run(fake, store, clean)
-    (may,) = [m for m in months(CONSUMPTION, date(2026, 5, 1), date(2026, 5, 1))]
-    fake.bodies[may.url] = b"not parquet"
     fake.published = dict.fromkeys(fake.published, REVISED)
-    report = run(fake, store, clean, now=LATER)
+    fake.revision = 1.0
+    run(fake, store, clean, now=LATER)
+    (may,) = months(CONSUMPTION, date(2026, 5, 1), date(2026, 5, 1))
+    fake.bodies[may.url] = b"not parquet"
+    report = run(fake, store, clean, now=LATER + timedelta(days=1))
     assert report.errors[0].startswith(f"{may.url}: not a Parquet export")
     assert len(report.errors) == 1
     assert report.warnings == [
-        "consumption 2026-05: the last response does not read, the one received at 2026-08-10 "
+        "consumption 2026-05: the last response does not read, the one received at 2026-08-18 "
         "12:00:00 UTC is used"
     ]
-    homes = table(clean, "consumption")
-    assert homes.filter(pl.col("start") == paris(2026, 5, 12)).height > 0
+    segment = ("RES1 (+ RES1WE)", "P1: ]0-3] kVA")
+    moment = paris(2026, 5, 12, 19, 30)
+    assert at(table(clean, "consumption"), segment, "mean_w", moment)["value"] == pytest.approx(
+        2 * (home(moment, 1.0) + 1)
+    )
 
 
 def test_faulty_metadata_is_an_error_and_only_missing_months_are_asked(
@@ -1014,13 +1023,26 @@ def test_a_response_with_a_row_outside_its_month_leaves_it_to_the_one_before(
     ]
 
 
-def test_a_panic_of_polars_is_a_faulty_month(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("owner", "name", "message"),
+    [
+        (pl, "scan_parquet", "not a Parquet export"),
+        (pl, "read_parquet", "not a Parquet export"),
+        (pl.DataFrame, "is_duplicated", "rows Polars cannot check"),
+    ],
+)
+def test_a_panic_of_polars_is_a_faulty_month(
+    monkeypatch: pytest.MonkeyPatch, owner: object, name: str, message: str
+) -> None:
+    # The footer, the columns and the checks of the rows: Polars may panic in each.
+    content = export(may_rows())
+
     def panic(*args: object, **options: object) -> pl.DataFrame:
         raise pl.exceptions.PanicException("index out of bounds")
 
-    monkeypatch.setattr(pl, "read_parquet", panic)
-    with pytest.raises(SchemaError, match="not a Parquet export"):
-        parse_month(b"PAR1", MAY, URL)
+    monkeypatch.setattr(owner, name, panic)
+    with pytest.raises(SchemaError, match=message):
+        parse_month(content, MAY, URL)
 
 
 @pytest.mark.parametrize(
