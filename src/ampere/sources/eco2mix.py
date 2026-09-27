@@ -273,10 +273,13 @@ def ingest(
             if kept_other is not None and (
                 held is None or rank(kept_other[0], other) > rank(held[0], file)
             ):
-                warnings.append(
-                    f"{name}: the kept {other.dataset} response covers more quarter-hours than "
-                    f"{file.dataset}, and is used"
-                )
+                if held is None:
+                    why = f"{file.dataset} has no usable response"
+                elif rank(kept_other[0], other)[0] > rank(held[0], file)[0]:
+                    why = f"it covers more quarter-hours than {file.dataset}"
+                else:
+                    why = f"it is more final than {file.dataset}"
+                warnings.append(f"{name}: the kept {other.dataset} response is used: {why}")
                 file, held = other, kept_other
             if held is not None:
                 plan.append((file, *held))
@@ -326,7 +329,7 @@ def settled(month: Month, file: MonthFile, best: str, now: datetime) -> bool:
     SETTLED_AFTER ago, it has the most final version ODRÉ announces, and it is whole."""
     if now < file.end + SETTLED_AFTER:
         return False
-    if month.version is None or VERSIONS.index(month.version) < VERSIONS.index(best):
+    if month.version is not None and VERSIONS.index(month.version) < VERSIONS.index(best):
         log.info("%s: ODRÉ now has %s data, asked again", file.url, best)
         return False
     if not complete(month, file):

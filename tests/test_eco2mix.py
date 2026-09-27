@@ -99,6 +99,8 @@ class FakeOdre:
         self.announced_definitive_until: datetime | None = None
         # Periods that lose their consolidated data, as a faulty republication could.
         self.hide_consolidated = False
+        # Real time over its whole window, even where consolidated data exist.
+        self.overlap = False
         self.now = NOW
         self.lag = timedelta(hours=1)
         self.fields = {level: dict(fields) for level, fields in FIELDS.items()}
@@ -109,7 +111,8 @@ class FakeOdre:
     def real_time_from(self) -> datetime:
         """Real time covers 90 days that end with tomorrow, past the consolidated data."""
         today = self.now.astimezone(PARIS).date()
-        return max(self.consolidated_until, day_bounds(today - timedelta(days=88))[0])
+        window = day_bounds(today - timedelta(days=88))[0]
+        return window if self.overlap else max(self.consolidated_until, window)
 
     def real_time_until(self, level: str) -> datetime:
         """The national forecast runs to the end of tomorrow; the region stops with today."""
@@ -162,6 +165,8 @@ class FakeOdre:
                     local.replace(tzinfo=PARIS, fold=fold).astimezone(UTC) for fold in (0, 1)
                 )
                 version = self.version(moment)
+                if kind == TR and self.overlap and moment >= self.real_time_from():
+                    version = "real_time"
                 if not start <= moment < end or version is None:
                     continue
                 if (version == "real_time") != (kind == TR):
@@ -565,11 +570,38 @@ def test_an_empty_consolidated_export_falls_back_on_the_real_time_kept(
     report = run(odre, store, clean, now=datetime(2026, 7, 20, 15, tzinfo=PARIS))
     assert report.warnings == [
         "FR 2026-06: ODRÉ announces consolidated data, but its export is empty",
-        "FR 2026-06: the kept national-tr response covers more quarter-hours than "
-        "national-cons-def, and is used",
+        "FR 2026-06: the kept national-tr response is used: it covers more quarter-hours than "
+        "national-cons-def",
     ]
     row = at(measures(clean), "FR", "consumption_mw", paris(2026, 6, 10, 7, 15))
     assert (row["value"], row["version"]) == (50_715.0, "real_time")
+
+
+def test_with_equal_coverage_the_response_of_the_chosen_dataset_stays(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    run(odre, store, clean, now=datetime(2026, 7, 5, 15, tzinfo=PARIS))  # June whole in real time
+    odre.consolidated_until = paris(2026, 7, 1)
+    report = run(odre, store, clean, now=datetime(2026, 7, 20, 15, tzinfo=PARIS))
+    assert not [warning for warning in report.warnings if "is used" in warning]
+    row = at(measures(clean), "FR", "consumption_mw", paris(2026, 6, 10, 7, 15))
+    assert row["version"] == "consolidated"
+
+
+def test_with_equal_coverage_the_most_final_version_wins(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    odre.overlap = True  # real time covers its whole window, May included
+    run(odre, store, clean)
+    odre.hide_consolidated = True  # May is now chosen from real time, whole
+    report = run(odre, store, clean, now=LATER)
+    assert "national-tr 2026-05" in asked(odre)
+    assert (
+        "FR 2026-05: the kept national-cons-def response is used: it is more final than national-tr"
+        in report.warnings
+    )
+    row = at(measures(clean), "FR", "co2_g_per_kwh", paris(2026, 5, 10, 7))
+    assert row["version"] == "consolidated"
 
 
 def test_periods_that_lose_the_consolidated_data_keep_the_consolidated_months(
@@ -580,8 +612,8 @@ def test_periods_that_lose_the_consolidated_data_keep_the_consolidated_months(
     report = run(odre, store, clean, now=LATER)
     assert "national-tr 2026-05" in asked(odre)  # asked, and empty
     assert (
-        "FR 2026-05: the kept national-cons-def response covers more quarter-hours than "
-        "national-tr, and is used" in report.warnings
+        "FR 2026-05: the kept national-cons-def response is used: it covers more quarter-hours "
+        "than national-tr" in report.warnings
     )
     assert report.errors == []
     row = at(measures(clean), "FR", "co2_g_per_kwh", paris(2026, 5, 10, 7))
