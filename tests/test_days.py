@@ -10,6 +10,7 @@ from ampere.data.days import (
     first_pass,
     never_happened,
     paris_day,
+    paris_months,
     quarter_hours,
 )
 
@@ -135,3 +136,16 @@ def test_never_happened_takes_a_wall_clock_time() -> None:
 )
 def test_the_first_pass_of_the_hour_lived_twice_is_found(instant: datetime, first: bool) -> None:
     assert first_pass(instant) is first
+
+
+def test_months_are_paris_months_bounded_in_utc() -> None:
+    assert paris_months(date(2026, 3, 15), date(2026, 4, 2)) == [
+        # 31 days less the hour of the clock change, then a summer month.
+        (datetime(2026, 2, 28, 23, tzinfo=UTC), datetime(2026, 3, 31, 22, tzinfo=UTC)),
+        (datetime(2026, 3, 31, 22, tzinfo=UTC), datetime(2026, 4, 30, 22, tzinfo=UTC)),
+    ]
+    assert paris_months(date(2025, 12, 31), date(2026, 1, 1)) == [
+        (datetime(2025, 11, 30, 23, tzinfo=UTC), datetime(2025, 12, 31, 23, tzinfo=UTC)),
+        (datetime(2025, 12, 31, 23, tzinfo=UTC), datetime(2026, 1, 31, 23, tzinfo=UTC)),
+    ]
+    assert paris_months(date(2026, 5, 2), date(2026, 4, 30)) == []

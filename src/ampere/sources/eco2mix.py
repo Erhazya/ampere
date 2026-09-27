@@ -29,6 +29,7 @@ from ampere.data.days import (
     first_pass,
     never_happened,
     paris_day,
+    paris_months,
     quarter_hours,
 )
 from ampere.data.raw import DamagedRawFile, RawStore
@@ -179,17 +180,6 @@ def month_url(area: Area, kind: str, start: datetime, end: datetime) -> str:
     return f"{API}/eco2mix-{dataset(area, kind)}/exports/json?{urlencode({'where': where})}"
 
 
-def months(first: date, last: date) -> list[tuple[datetime, datetime]]:
-    """The Paris months from the one holding `first` to the one holding `last`, bounded in UTC."""
-    bounds = []
-    month = first.replace(day=1)
-    while month <= last:
-        following = (month + timedelta(days=31)).replace(day=1)
-        bounds.append((day_bounds(month)[0], day_bounds(following)[0]))
-        month = following
-    return bounds
-
-
 def best_version(
     periods: dict[str, tuple[datetime, datetime]], start: datetime, end: datetime
 ) -> str:
@@ -244,7 +234,7 @@ def ingest(
         settled_data = periods(area, CONS_DEF)
         real_time = periods(area, TR)["real_time"]
         # Up to the month of tomorrow: on the last day of a month, RTE's forecast is in the next.
-        for start, end in months(since, paris_day(now) + timedelta(days=1)):
+        for start, end in paris_months(since, paris_day(now) + timedelta(days=1)):
             best = best_version(settled_data, start, end)
             file = MonthFile(area, TR if best == "real_time" else CONS_DEF, start, end)
             name = f"{area.name} {start.astimezone(PARIS):%Y-%m}"
