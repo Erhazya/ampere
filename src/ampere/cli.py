@@ -2,7 +2,7 @@
 
 import argparse
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ampere import __version__
@@ -43,10 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("source", choices=["smard"])
     ingest.add_argument(
-        "--since",
-        type=date.fromisoformat,
-        metavar="YYYY-MM-DD",
-        help="first day of the history (by default 1 July 2023, as in ADR 023)",
+        "--full",
+        action="store_true",
+        help="ask again for every week since 1 July 2023, not only those that can still change "
+        "(about 170 requests)",
     )
     return parser
 
@@ -55,10 +55,11 @@ def main(argv: list[str] | None = None) -> int:
     """Run a command; its return value is the exit status."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     if args.command == "data":
         return init_data()
     if args.command == "ingest":
-        return ingest_source(args.since)
+        return ingest_source(full=args.full)
     if args.command == "api":
         # Imported here, so that other commands start fast.
         import uvicorn
@@ -84,14 +85,13 @@ def init_data() -> int:
     return 0
 
 
-def ingest_source(since: date | None) -> int:
+def ingest_source(*, full: bool) -> int:
     """Ingest SMARD, the only source so far; invalid rows and errors make the exit status 1."""
     from ampere.data.folders import data_root
     from ampere.data.http import client
     from ampere.data.raw import RawStore
     from ampere.sources import smard
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     root = data_root()
     log.info("data folder: %s", root)
     try:
@@ -100,9 +100,7 @@ def ingest_source(since: date | None) -> int:
         log.error("%s", error)
         return 1
     with client() as http:
-        report = smard.ingest(
-            http, store, root / "clean", now=datetime.now(UTC), since=since or smard.SINCE
-        )
+        report = smard.ingest(http, store, root / "clean", now=datetime.now(UTC), full=full)
     for warning in report.warnings:
         log.warning("%s", warning)
     for problem in [*report.invalid, *report.errors]:

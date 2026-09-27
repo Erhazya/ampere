@@ -40,6 +40,8 @@ LOWEST, HIGHEST = -500.0, 5000.0
 SETTLED_AFTER = timedelta(days=14)
 # Seconds between two weekly files, out of politeness.
 PAUSE = 0.5
+# The largest response accepted: SMARD's weekly files weigh about 15 kB, its index 9 kB.
+MAX_BYTES = 1_000_000
 # After this hour in Paris, tomorrow's prices should be out.
 PUBLISHED_BY = 14
 
@@ -121,6 +123,7 @@ def ingest(
 ) -> Report:
     """Fetch the weeks that can still change or that the raw layer lacks, every week if full,
     then rebuild the clean prices, check them, and replace the clean file if its rows are valid."""
+    kept = len(store.receipts(SOURCE))
     weeks = parse_index(fetch(http, store, "index", index_url(), sleep), index_url())
     first = day_bounds(since)[0]
     # Each week ends where the next one starts; the last one, on the next Monday in Paris.
@@ -139,6 +142,12 @@ def ingest(
             asked += 1
             parse_series(fetch(http, store, dataset(resolution), url, sleep), url)
     prices = build(store, since=since)
+    log.info(
+        "smard: %d weekly files asked, %d new responses, %d quarter-hours",
+        asked,
+        len(store.receipts(SOURCE)) - kept,
+        prices.height,
+    )
     report = check(prices, store, since=since, now=now)
     path = clean / SOURCE / "prices.parquet"
     if report.invalid:
@@ -180,8 +189,8 @@ def fetch(
     http: httpx2.Client, store: RawStore, name: str, url: str, sleep: Callable[[float], None]
 ) -> bytes:
     """GET a SMARD file and keep it in the raw layer, before anything reads it."""
-    fetched = get(http, url, content_type=JSON, sleep=sleep)
-    store.save(
+    fetched = get(http, url, content_type=JSON, max_bytes=MAX_BYTES, sleep=sleep)
+    saved = store.save(
         source=SOURCE,
         dataset=name,
         request=url,
@@ -190,6 +199,8 @@ def fetch(
         content=fetched.content,
         extension="json",
     )
+    if saved.new:
+        log.info("%s: new response kept in %s", url, saved.receipt.path)
     return fetched.content
 
 

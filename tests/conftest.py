@@ -5,6 +5,15 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def empty_data_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Point AMPERE_DATA to an empty folder in every test, so that none reaches the data of the
+    working copy: with no raw layer there, an ingestion stops before its first request."""
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path_factory.mktemp("data")))
+
+
 @pytest.fixture
 def dashboard(tmp_path: Path) -> Path:
     """A folder shaped like the dashboard build.

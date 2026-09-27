@@ -1,6 +1,7 @@
 """SMARD prices, from a fake SMARD that serves an index and weekly files by URL."""
 
 import json
+import logging
 import math
 import re
 from collections.abc import Callable
@@ -14,7 +15,7 @@ import polars as pl
 import pytest
 
 from ampere.data.days import day_bounds
-from ampere.data.http import client
+from ampere.data.http import UnexpectedResponse, client
 from ampere.data.raw import RawStore
 from ampere.sources.smard import (
     QUARTER_HOURS_FROM,
@@ -232,6 +233,29 @@ def test_full_asks_for_every_week_again(smard: FakeSmard, store: RawStore, clean
     smard.requests.clear()
     run(smard, store, clean, now=datetime(2025, 10, 14, 15, tzinfo=PARIS), full=True)
     assert len(smard.requests) == 5  # the index and the four weekly files
+
+
+def test_each_new_response_and_the_whole_run_are_logged(
+    smard: FakeSmard, store: RawStore, clean: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ampere")
+    run(smard, store, clean)
+    kept = [record for record in caplog.records if "new response kept" in record.getMessage()]
+    assert len(kept) == 5  # the index and the four weekly files
+    assert "smard: 4 weekly files asked, 5 new responses, 1728 quarter-hours" in caplog.text
+    caplog.clear()
+    run(smard, store, clean)
+    assert "smard: 4 weekly files asked, 0 new responses, 1728 quarter-hours" in caplog.text
+
+
+def test_a_response_larger_than_a_megabyte_is_refused(
+    smard: FakeSmard, store: RawStore, clean: Path
+) -> None:
+    # SMARD's weekly files weigh about 15 kB: anything near a megabyte is not one of them.
+    week = f"{BASE}/254_DE_quarterhour_{ms(day_bounds(date(2025, 10, 6))[0])}.json"
+    smard.files[week] = b" " * 1_000_001
+    with pytest.raises(UnexpectedResponse, match="more than 1000000 bytes"):
+        run(smard, store, clean)
 
 
 JANUARY = date(2026, 1, 5)  # a Monday
