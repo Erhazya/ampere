@@ -1,0 +1,274 @@
+"""SMARD: the day-ahead price of the France zone, from the Bundesnetzagentur (ADR 003, ADR 023).
+
+SMARD publishes one file per week and per market step. A run asks for the weekly index, then for
+the weeks the raw layer lacks and for the last two weeks, which can still change. It keeps every
+response in the raw layer, rebuilds clean/smard/prices.parquet from the raw layer alone, and
+checks the result: missing quarter-hours are reported, never filled.
+"""
+
+import json
+import logging
+import os
+import time
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import httpx2
+import polars as pl
+
+from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, paris_day, quarter_hours
+from ampere.data.http import get
+from ampere.data.raw import RawStore, Receipt
+
+log = logging.getLogger(__name__)
+
+SOURCE = "smard"
+# Filter 254, "Marktpreis: Frankreich", in the chart data of SMARD's German site.
+BASE = "https://www.smard.de/app/chart_data/254/DE"
+JSON = "application/json"
+HOUR, QUARTER = "hour", "quarterhour"
+# The start of the history: the first day of the Enedis window, shared by every source.
+SINCE = date(2023, 7, 1)
+# 1 October 2025 at midnight in Paris: the market's first day of prices by the quarter-hour.
+QUARTER_HOURS_FROM = datetime(2025, 9, 30, 22, tzinfo=UTC)
+# The limits of the European day-ahead market (-500 and 4,000 €/MWh), with some room.
+LOWEST, HIGHEST = -500.0, 5000.0
+# Seconds between two weekly files, out of politeness.
+PAUSE = 0.5
+# After this hour in Paris, tomorrow's prices should be out.
+PUBLISHED_BY = 14
+
+SCHEMA = pl.Schema(
+    {
+        "start": pl.Datetime("us", "UTC"),
+        "price_eur_per_mwh": pl.Float64(),
+        "market_step_minutes": pl.UInt8(),
+        "received_at": pl.Datetime("us", "UTC"),
+    }
+)
+
+
+class SchemaError(ValueError):
+    """A SMARD response that no longer has the shape the code expects."""
+
+
+@dataclass
+class Report:
+    """What the checks found: errors stop the daily job, warnings are only logged."""
+
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def index_url() -> str:
+    return f"{BASE}/index_{QUARTER}.json"
+
+
+def week_url(resolution: str, week: int) -> str:
+    return f"{BASE}/254_DE_{resolution}_{week}.json"
+
+
+def dataset(resolution: str) -> str:
+    return f"prices-{resolution}"
+
+
+def resolutions(start: datetime, end: datetime) -> list[str]:
+    """The files a week needs: hourly before the quarter-hour market, by the quarter-hour after."""
+    needed = []
+    if start < QUARTER_HOURS_FROM:
+        needed.append(HOUR)
+    if end > QUARTER_HOURS_FROM:
+        needed.append(QUARTER)
+    return needed
+
+
+def ingest(
+    http: httpx2.Client,
+    store: RawStore,
+    clean: Path,
+    *,
+    now: datetime,
+    since: date = SINCE,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Report:
+    """Fetch what is missing, rebuild the clean prices, and check them."""
+    weeks = parse_index(fetch(http, store, "index", index_url(), sleep), index_url())
+    first = ms(day_bounds(since)[0])
+    # The weeks that end after the first day, with the start of the next one as their end.
+    ends = [*weeks[1:], None]
+    wanted = [
+        (week, end) for week, end in zip(weeks, ends, strict=True) if end is None or end > first
+    ]
+    recent = {week for week, _ in wanted[-2:]}
+    asked = 0
+    for week, end in wanted:
+        start = moment(week)
+        finish = moment(end) if end is not None else start + timedelta(days=7)
+        for resolution in resolutions(start, finish):
+            url = week_url(resolution, week)
+            if week not in recent and store.last(SOURCE, dataset(resolution), url) is not None:
+                continue
+            if asked:
+                sleep(PAUSE)
+            asked += 1
+            parse_series(fetch(http, store, dataset(resolution), url, sleep), url)
+    prices = build(store, since=since)
+    write_parquet(prices, clean / SOURCE / "prices.parquet")
+    return check(prices, store, since=since, now=now)
+
+
+def fetch(
+    http: httpx2.Client, store: RawStore, name: str, url: str, sleep: Callable[[float], None]
+) -> bytes:
+    """GET a SMARD file and keep it in the raw layer, before anything reads it."""
+    fetched = get(http, url, content_type=JSON, sleep=sleep)
+    store.save(
+        source=SOURCE,
+        dataset=name,
+        request=url,
+        url=fetched.url,
+        content_type=fetched.content_type,
+        content=fetched.content,
+        extension="json",
+    )
+    return fetched.content
+
+
+def parse_index(content: bytes, url: str) -> list[int]:
+    """The starts of the weeks, in milliseconds since 1970, oldest first."""
+    data = load(content, url)
+    weeks = data.get("timestamps") if isinstance(data, dict) else None
+    if not isinstance(weeks, list) or not weeks or not all(is_int(week) for week in weeks):
+        raise SchemaError(f"{url}: no list of week starts")
+    return sorted(weeks)
+
+
+def parse_series(content: bytes, url: str) -> list[tuple[int, float | None]]:
+    """The points of a weekly file: (start in milliseconds, price in €/MWh, or None if absent)."""
+    data = load(content, url)
+    meta = data.get("meta_data") if isinstance(data, dict) else None
+    if not isinstance(meta, dict) or meta.get("version") != 1:
+        raise SchemaError(f"{url}: meta_data version is not 1")
+    series = data.get("series")
+    if not isinstance(series, list):
+        raise SchemaError(f"{url}: no series")
+    points = []
+    for point in series:
+        if not (isinstance(point, list) and len(point) == 2 and is_int(point[0])):
+            raise SchemaError(f"{url}: unexpected point {point!r}")
+        price = point[1]
+        if price is not None and not (is_number(price)):
+            raise SchemaError(f"{url}: unexpected price {point!r}")
+        points.append((point[0], None if price is None else float(price)))
+    return points
+
+
+def build(store: RawStore, *, since: date) -> pl.DataFrame:
+    """The clean prices, rebuilt from the last response of each weekly file in the raw layer.
+
+    An hourly price covers its four quarter-hours; each price comes from the file of the market
+    step of its time. An absent price stays absent.
+    """
+    first = day_bounds(since)[0]
+    rows: list[tuple[datetime, float, int, datetime]] = []
+    for resolution, step in ((HOUR, 60), (QUARTER, 15)):
+        for receipt in last_receipts(store, dataset(resolution)):
+            for start_ms, price in parse_series(store.read(receipt), receipt.request):
+                start = moment(start_ms)
+                if price is None or (start < QUARTER_HOURS_FROM) != (resolution == HOUR):
+                    continue
+                quarters = [start + i * QUARTER_HOUR for i in range(step // 15)]
+                rows.extend(
+                    (quarter, price, step, receipt.received_at)
+                    for quarter in quarters
+                    if quarter >= first
+                )
+    return pl.DataFrame(rows, schema=SCHEMA, orient="row").sort("start")
+
+
+def check(prices: pl.DataFrame, store: RawStore, *, since: date, now: datetime) -> Report:
+    """Errors for the past and today; a warning when tomorrow's prices are late."""
+    report = Report()
+    for start, count in prices.group_by("start").len().filter(pl.col("len") > 1).rows():
+        report.errors.append(f"{start:%Y-%m-%d %H:%M} UTC: {count} prices")
+    off_grid = prices.filter(pl.col("start").dt.truncate("15m") != pl.col("start"))
+    report.errors.extend(
+        f"{start:%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour" for start in off_grid["start"]
+    )
+    outside = prices.filter(~pl.col("price_eur_per_mwh").is_between(LOWEST, HIGHEST))
+    for start, price in outside.select("start", "price_eur_per_mwh").rows():
+        report.errors.append(
+            f"{start:%Y-%m-%d %H:%M} UTC: {price} €/MWh, outside {LOWEST:.0f} to {HIGHEST:.0f}"
+        )
+    counts = quarter_hours_per_day(prices)
+    today = paris_day(now)
+    for day in days(since, today):
+        expected, found = quarter_hours(day), counts.get(day, 0)
+        if found < expected:
+            report.errors.append(f"{day}: {expected - found} of {expected} quarter-hours missing")
+    tomorrow = today + timedelta(days=1)
+    if now.astimezone(PARIS).hour >= PUBLISHED_BY and counts.get(tomorrow, 0) < quarter_hours(
+        tomorrow
+    ):
+        report.warnings.append(
+            f"{tomorrow}: {counts.get(tomorrow, 0)} of {quarter_hours(tomorrow)} quarter-hours "
+            "published so far"
+        )
+    report.errors.extend(f"raw layer: {problem}" for problem in store.verify(SOURCE))
+    return report
+
+
+def quarter_hours_per_day(prices: pl.DataFrame) -> dict[date, int]:
+    """How many distinct quarter-hours each Paris day has."""
+    per_day = (
+        prices.select(pl.col("start").unique())
+        .group_by(pl.col("start").dt.convert_time_zone("Europe/Paris").dt.date().alias("day"))
+        .len()
+    )
+    return dict(per_day.rows())
+
+
+def last_receipts(store: RawStore, name: str) -> Iterable[Receipt]:
+    """The last response of each request of a dataset."""
+    last = {
+        receipt.request: receipt for receipt in store.receipts(SOURCE) if receipt.dataset == name
+    }
+    return last.values()
+
+
+def write_parquet(frame: pl.DataFrame, path: Path) -> None:
+    """Replace a clean file in one step: a reader sees the old file or the new one, never half."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    frame.write_parquet(temporary)
+    os.replace(temporary, path)
+
+
+def days(first: date, last: date) -> Iterable[date]:
+    return (first + timedelta(days=n) for n in range((last - first).days + 1))
+
+
+def load(content: bytes, url: str) -> Any:
+    try:
+        return json.loads(content)
+    except ValueError as error:
+        raise SchemaError(f"{url}: not JSON ({error})") from error
+
+
+def is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def ms(instant: datetime) -> int:
+    return int(instant.timestamp() * 1000)
+
+
+def moment(milliseconds: int) -> datetime:
+    return datetime.fromtimestamp(milliseconds / 1000, UTC)
