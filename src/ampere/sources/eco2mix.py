@@ -132,9 +132,9 @@ class Month:
     versions: set[str] = field(default_factory=set)
 
     @property
-    def version(self) -> str:
-        """The least final version among its rows."""
-        return min(self.versions, key=VERSIONS.index, default=VERSIONS[0])
+    def version(self) -> str | None:
+        """The least final version among its rows; None for a response without any row."""
+        return min(self.versions, key=VERSIONS.index, default=None)
 
 
 @dataclass(frozen=True)
@@ -222,7 +222,8 @@ def ingest(
     kept = len(store.receipts(SOURCE))
     first = day_bounds(since)[0]
     plan: list[tuple[MonthFile, Month, datetime]] = []
-    late: list[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
     asked = 0
 
     def ask(name: str, url: str) -> tuple[bytes, datetime]:
@@ -246,19 +247,39 @@ def ingest(
         for start, end in months(since, paris_day(now) + timedelta(days=1)):
             best = best_version(settled_data, start, end)
             file = MonthFile(area, TR if best == "real_time" else CONS_DEF, start, end)
+            name = f"{area.name} {start.astimezone(PARIS):%Y-%m}"
             held = kept_month(store, file)
             # A real-time month whose start has left ODRÉ's window would come back cut: it stays
             # as it was kept, even with full.
             whole = file.kind == CONS_DEF or real_time[0] <= start
             if held is None or (whole and (full or not settled(held[0], file, best, now))):
                 content, received_at = ask(file.dataset, file.url)
-                held = parse_month(content, file), received_at
-                if VERSIONS.index(held[0].version) < VERSIONS.index(best):
-                    late.append(
-                        f"{area.name} {start.astimezone(PARIS):%Y-%m}: ODRÉ announces {best} data, "
-                        f"but its export is {held[0].version}"
-                    )
-            plan.append((file, *held))
+                try:
+                    held = parse_month(content, file), received_at
+                except SchemaError as error:
+                    # A faulty month is an error; the run goes on with what was kept for it.
+                    errors.append(str(error))
+                else:
+                    version = held[0].version
+                    if best != "real_time" and (
+                        version is None or VERSIONS.index(version) < VERSIONS.index(best)
+                    ):
+                        warnings.append(
+                            f"{name}: ODRÉ announces {best} data, but its export is "
+                            f"{version or 'empty'}"
+                        )
+            other = MonthFile(area, CONS_DEF if file.kind == TR else TR, start, end)
+            kept_other = kept_month(store, other)
+            if kept_other is not None and (
+                held is None or rank(kept_other[0], other) > rank(held[0], file)
+            ):
+                warnings.append(
+                    f"{name}: the kept {other.dataset} response covers more quarter-hours than "
+                    f"{file.dataset}, and is used"
+                )
+                file, held = other, kept_other
+            if held is not None:
+                plan.append((file, *held))
     measures = build(plan)
     log.info(
         "eco2mix: %d requests, %d new responses, %d values",
@@ -267,7 +288,8 @@ def ingest(
         measures.height,
     )
     report = check(measures, store, since=since, now=now)
-    report.warnings[:0] = late
+    report.errors[:0] = errors
+    report.warnings[:0] = warnings
     path = clean / SOURCE / "measures.parquet"
     if report.invalid:
         log.error("%s kept as it was: the new values break its rules", path)
@@ -285,8 +307,18 @@ def kept_month(store: RawStore, file: MonthFile) -> tuple[Month, datetime] | Non
     try:
         return parse_month(store.read(last), file), last.received_at
     except (DamagedRawFile, SchemaError) as error:
-        log.warning("%s: the kept response is unusable, asked again (%s)", file.url, error)
+        log.warning("%s: the kept response is unusable (%s)", file.url, error)
         return None
+
+
+def rank(month: Month, file: MonthFile) -> tuple[int, int]:
+    """How a response compares with another for its month: first the quarter-hours its values
+    cover, all measures together, then how final its version is."""
+    covered = sum(
+        len(month.values[measure.name]) * step_minutes(measure, file.kind) // 15
+        for measure in file.area.measures
+    )
+    return covered, -1 if month.version is None else VERSIONS.index(month.version)
 
 
 def settled(month: Month, file: MonthFile, best: str, now: datetime) -> bool:
@@ -294,7 +326,7 @@ def settled(month: Month, file: MonthFile, best: str, now: datetime) -> bool:
     SETTLED_AFTER ago, it has the most final version ODRÉ announces, and it is whole."""
     if now < file.end + SETTLED_AFTER:
         return False
-    if VERSIONS.index(month.version) < VERSIONS.index(best):
+    if month.version is None or VERSIONS.index(month.version) < VERSIONS.index(best):
         log.info("%s: ODRÉ now has %s data, asked again", file.url, best)
         return False
     if not complete(month, file):

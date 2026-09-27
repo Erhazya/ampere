@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="ask again for the whole history since 1 July 2023, not only what can still change "
-        "(about 170 requests for SMARD, 80 for éCO2mix)",
+        "(about 170 requests for SMARD, 82 for éCO2mix)",
     )
     return parser
 

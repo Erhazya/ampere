@@ -97,6 +97,8 @@ class FakeOdre:
         self.consolidated_until = paris(2026, 6, 1)
         # What the periods announce, when a test wants them ahead of the exports.
         self.announced_definitive_until: datetime | None = None
+        # Periods that lose their consolidated data, as a faulty republication could.
+        self.hide_consolidated = False
         self.now = NOW
         self.lag = timedelta(hours=1)
         self.fields = {level: dict(fields) for level, fields in FIELDS.items()}
@@ -130,7 +132,7 @@ class FakeOdre:
             spans = [
                 ("definitive", paris(2025, 1, 1), definitive),
                 ("consolidated", definitive, self.consolidated_until),
-            ]
+            ][: 1 if self.hide_consolidated else 2]
         return [
             {"nature": NATURES[name], "first": first.isoformat(), "last": (end - step).isoformat()}
             for name, first, end in spans
@@ -491,7 +493,7 @@ def test_a_month_that_turns_consolidated_comes_from_the_consolidated_dataset(
     assert (row["value"], row["step_minutes"], row["version"]) == (50_701.0, 30, "consolidated")
 
 
-def test_a_damaged_real_time_file_of_a_month_now_consolidated_stops_nothing(
+def test_a_damaged_real_time_file_of_a_month_now_consolidated_blocks_no_run(
     odre: FakeOdre, store: RawStore, clean: Path
 ) -> None:
     run(odre, store, clean)
@@ -511,12 +513,90 @@ def test_an_unreadable_real_time_response_of_a_month_now_consolidated_stops_noth
 ) -> None:
     june = month_file(FRANCE, TR, 2026, 6)
     odre.bodies[june.url] = b'{"error": "try later"}'
-    with pytest.raises(SchemaError, match="not a list of rows"):
-        run(odre, store, clean)
+    assert f"{june.url}: not a list of rows" in run(odre, store, clean).errors
     del odre.bodies[june.url]
     odre.consolidated_until = paris(2026, 7, 1)
     report = run(odre, store, clean, now=datetime(2026, 7, 20, 15, tzinfo=PARIS))
     assert report.errors == [] and report.invalid == []
+
+
+def test_a_faulty_month_is_an_error_and_the_run_goes_on(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    june = month_file(FRANCE, TR, 2026, 6)
+    odre.bodies[june.url] = b'{"error": "try later"}'
+    report = run(odre, store, clean)
+    assert f"{june.url}: not a list of rows" in report.errors
+    assert "FR consumption_mw 2026-06-10: 96 of 96 quarter-hours missing" in report.errors
+    assert "regional-tr 2026-06" in asked(odre)
+    frame = measures(clean)
+    assert on(frame, "FR", "consumption_mw", date(2026, 5, 10)).height == 96
+    assert on(frame, "ARA", "solar_mw", date(2026, 6, 10)).height == 96
+
+
+def test_a_faulty_month_keeps_the_response_kept_for_it(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    run(odre, store, clean)
+    june = month_file(FRANCE, TR, 2026, 6)
+    odre.bodies[june.url] = b'{"error": "try later"}'
+    report = run(odre, store, clean, now=LATER)
+    assert f"{june.url}: not a list of rows" in report.errors
+    # June comes from the response kept on the 20th: whole up to then, missing after.
+    frame = measures(clean)
+    assert on(frame, "FR", "consumption_mw", date(2026, 6, 10)).height == 96
+    assert "FR consumption_mw 2026-06-22: 96 of 96 quarter-hours missing" in report.errors
+
+
+def test_a_faulty_response_of_the_periods_stops_the_run(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    odre.bodies[coverage_url(FRANCE, CONS_DEF)] = b"[]"
+    with pytest.raises(SchemaError, match="no list of results"):
+        run(odre, store, clean)
+
+
+def test_an_empty_consolidated_export_falls_back_on_the_real_time_kept(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    run(odre, store, clean)
+    odre.consolidated_until = paris(2026, 7, 1)  # June announced consolidated...
+    odre.bodies[month_file(FRANCE, CONS_DEF, 2026, 6).url] = b"[]"  # ...but not exported yet
+    report = run(odre, store, clean, now=datetime(2026, 7, 20, 15, tzinfo=PARIS))
+    assert report.warnings == [
+        "FR 2026-06: ODRÉ announces consolidated data, but its export is empty",
+        "FR 2026-06: the kept national-tr response covers more quarter-hours than "
+        "national-cons-def, and is used",
+    ]
+    row = at(measures(clean), "FR", "consumption_mw", paris(2026, 6, 10, 7, 15))
+    assert (row["value"], row["version"]) == (50_715.0, "real_time")
+
+
+def test_periods_that_lose_the_consolidated_data_keep_the_consolidated_months(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    run(odre, store, clean)
+    odre.hide_consolidated = True
+    report = run(odre, store, clean, now=LATER)
+    assert "national-tr 2026-05" in asked(odre)  # asked, and empty
+    assert (
+        "FR 2026-05: the kept national-cons-def response covers more quarter-hours than "
+        "national-tr, and is used" in report.warnings
+    )
+    assert report.errors == []
+    row = at(measures(clean), "FR", "co2_g_per_kwh", paris(2026, 5, 10, 7))
+    assert (row["value"], row["version"]) == (27 + 1, "consolidated")
+
+
+def test_a_real_time_month_out_of_the_window_is_asked_when_nothing_is_kept(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    odre.definitive_until = odre.consolidated_until = paris(2026, 4, 1)
+    # A first run on 10 July: real time starts on 13 April, and April comes in part.
+    report = run(odre, store, clean, now=datetime(2026, 7, 10, 15, tzinfo=PARIS))
+    assert "national-tr 2026-04" in asked(odre)
+    assert "FR consumption_mw 2026-04-12: 96 of 96 quarter-hours missing" in report.errors
+    assert "FR consumption_mw 2026-04-13: 96 of 96 quarter-hours missing" not in report.errors
 
 
 def test_a_consolidated_month_that_turns_definitive_is_asked_again(
@@ -632,8 +712,7 @@ def test_an_old_month_received_with_an_unknown_shape_is_asked_again(
     odre: FakeOdre, store: RawStore, clean: Path
 ) -> None:
     odre.bodies[APRIL.url] = b'{"error": "try later"}'
-    with pytest.raises(SchemaError, match="not a list of rows"):
-        run(odre, store, clean)
+    assert f"{APRIL.url}: not a list of rows" in run(odre, store, clean).errors
     del odre.bodies[APRIL.url]
     report = run(odre, store, clean, now=LATER)
     assert report.errors == [] and report.invalid == []
