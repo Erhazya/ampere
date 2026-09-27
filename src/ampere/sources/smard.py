@@ -1,9 +1,9 @@
 """SMARD: the day-ahead price of the France zone, from the Bundesnetzagentur (ADR 003, ADR 023).
 
 SMARD publishes one file per week and per market step. A run asks for the weekly index, then for
-the weeks the raw layer lacks and for the last two weeks, which can still change. It keeps every
-response in the raw layer, rebuilds clean/smard/prices.parquet from the raw layer alone, and
-checks the result: missing quarter-hours are reported, never filled.
+the weeks that can still change, up to 14 days after their end, and for those the raw layer does
+not hold whole. It keeps every response in the raw layer, rebuilds clean/smard/prices.parquet from
+the raw layer alone, and checks the result: missing quarter-hours are reported, never filled.
 """
 
 import json
@@ -21,7 +21,7 @@ import polars as pl
 
 from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, paris_day, quarter_hours
 from ampere.data.http import get
-from ampere.data.raw import RawStore, Receipt
+from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,8 @@ SINCE = date(2023, 7, 1)
 QUARTER_HOURS_FROM = datetime(2025, 9, 30, 22, tzinfo=UTC)
 # The limits of the European day-ahead market (-500 and 4,000 €/MWh), with some room.
 LOWEST, HIGHEST = -500.0, 5000.0
+# A week can change until this long after its end: SMARD regenerates some files days later.
+SETTLED_AFTER = timedelta(days=14)
 # Seconds between two weekly files, out of politeness.
 PAUSE = 0.5
 # After this hour in Paris, tomorrow's prices should be out.
@@ -75,14 +77,27 @@ def dataset(resolution: str) -> str:
     return f"prices-{resolution}"
 
 
+def span(resolution: str, start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    """The part of a week that a file gives: hourly prices before the quarter-hour market,
+    quarter-hour prices after."""
+    if resolution == HOUR:
+        return start, min(end, QUARTER_HOURS_FROM)
+    return max(start, QUARTER_HOURS_FROM), end
+
+
 def resolutions(start: datetime, end: datetime) -> list[str]:
-    """The files a week needs: hourly before the quarter-hour market, by the quarter-hour after."""
+    """The files a week needs: those that give part of it."""
     needed = []
-    if start < QUARTER_HOURS_FROM:
-        needed.append(HOUR)
-    if end > QUARTER_HOURS_FROM:
-        needed.append(QUARTER)
+    for resolution in (HOUR, QUARTER):
+        lower, upper = span(resolution, start, end)
+        if lower < upper:
+            needed.append(resolution)
     return needed
+
+
+def week_end(start: datetime) -> datetime:
+    """The end of a SMARD week: the next Monday at midnight in Paris."""
+    return day_bounds(paris_day(start) + timedelta(days=7))[0]
 
 
 def ingest(
@@ -92,24 +107,23 @@ def ingest(
     *,
     now: datetime,
     since: date = SINCE,
+    full: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Report:
-    """Fetch what is missing, rebuild the clean prices, and check them."""
+    """Fetch the weeks that can still change or that the raw layer lacks, every week if full,
+    then rebuild the clean prices and check them."""
     weeks = parse_index(fetch(http, store, "index", index_url(), sleep), index_url())
-    first = ms(day_bounds(since)[0])
-    # The weeks that end after the first day, with the start of the next one as their end.
-    ends = [*weeks[1:], None]
-    wanted = [
-        (week, end) for week, end in zip(weeks, ends, strict=True) if end is None or end > first
-    ]
-    recent = {week for week, _ in wanted[-2:]}
+    first = day_bounds(since)[0]
+    # Each week ends where the next one starts; the last one, on the next Monday in Paris.
+    starts = [moment(week) for week in weeks]
+    ends = [*starts[1:], week_end(starts[-1])]
     asked = 0
-    for week, end in wanted:
-        start = moment(week)
-        finish = moment(end) if end is not None else start + timedelta(days=7)
-        for resolution in resolutions(start, finish):
+    for week, start, end in zip(weeks, starts, ends, strict=True):
+        if end <= first:
+            continue
+        for resolution in resolutions(start, end):
             url = week_url(resolution, week)
-            if week not in recent and store.last(SOURCE, dataset(resolution), url) is not None:
+            if not full and settled(store, resolution, url, start, end, now):
                 continue
             if asked:
                 sleep(PAUSE)
@@ -118,6 +132,34 @@ def ingest(
     prices = build(store, since=since)
     write_parquet(prices, clean / SOURCE / "prices.parquet")
     return check(prices, store, since=since, now=now)
+
+
+def settled(
+    store: RawStore, resolution: str, url: str, start: datetime, end: datetime, now: datetime
+) -> bool:
+    """Whether the raw layer holds a weekly file for good, so that a run can skip it.
+
+    The week must have ended more than SETTLED_AFTER ago, and its last response must read and give
+    every price of its span. A response that is damaged, of an unknown shape or short of prices is
+    asked for again, however old the week: after an outage, the run completes what it had.
+    """
+    if now < end + SETTLED_AFTER:
+        return False
+    last = store.last(SOURCE, dataset(resolution), url)
+    if last is None:
+        return False
+    try:
+        points = parse_series(store.read(last), url)
+    except (DamagedRawFile, SchemaError) as error:
+        log.warning("%s: the kept response is unusable, asked again (%s)", url, error)
+        return False
+    lower, upper = span(resolution, start, end)
+    step = timedelta(hours=1) if resolution == HOUR else QUARTER_HOUR
+    expected = {lower + i * step for i in range((upper - lower) // step)}
+    if not expected <= {moment(point) for point, price in points if price is not None}:
+        log.warning("%s: the kept response lacks prices, asked again", url)
+        return False
+    return True
 
 
 def fetch(
@@ -264,10 +306,6 @@ def is_int(value: object) -> bool:
 
 def is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
-
-
-def ms(instant: datetime) -> int:
-    return int(instant.timestamp() * 1000)
 
 
 def moment(milliseconds: int) -> datetime:

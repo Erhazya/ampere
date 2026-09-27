@@ -16,15 +16,16 @@ from ampere.data.http import client
 from ampere.data.raw import RawStore
 from ampere.sources.smard import (
     QUARTER_HOURS_FROM,
+    SCHEMA,
     Report,
     SchemaError,
-    SCHEMA,
     build,
     check,
     ingest,
     parse_index,
     parse_series,
     resolutions,
+    week_end,
 )
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -110,10 +111,11 @@ def run(
     now: datetime = NOW,
     since: date = SINCE,
     pauses: list[float] | None = None,
+    full: bool = False,
 ) -> Report:
     with client(httpx2.MockTransport(smard.handle)) as http:
         sleep = pauses.append if pauses is not None else (lambda seconds: None)
-        return ingest(http, store, clean, now=now, since=since, sleep=sleep)
+        return ingest(http, store, clean, now=now, since=since, full=full, sleep=sleep)
 
 
 def prices(clean: Path) -> pl.DataFrame:
@@ -183,14 +185,15 @@ def test_the_transition_week_takes_each_price_from_its_market_step(
     assert frame["start"].is_unique().all()
 
 
-def test_a_second_run_asks_again_only_for_the_last_two_weeks(
+def test_a_later_run_asks_again_only_for_the_weeks_that_can_still_change(
     smard: FakeSmard, store: RawStore, clean: Path
 ) -> None:
     run(smard, store, clean)
     files = sorted(store.root.rglob("*.gz"))
     first = prices(clean)
     smard.requests.clear()
-    assert run(smard, store, clean).errors == []
+    # On 14 October, the week of 22 September ended more than 14 days ago: it is kept for good.
+    run(smard, store, clean, now=datetime(2025, 10, 14, 15, tzinfo=PARIS))
     asked = [url.removeprefix(f"{BASE}/") for url in smard.requests]
     assert asked == [
         "index_quarterhour.json",
@@ -203,6 +206,93 @@ def test_a_second_run_asks_again_only_for_the_last_two_weeks(
     assert prices(clean).equals(first)
 
 
+@pytest.mark.parametrize(
+    ("now", "asked"),
+    [
+        (datetime(2025, 10, 12, 23, 59, tzinfo=PARIS), True),
+        (datetime(2025, 10, 13, 0, 0, tzinfo=PARIS), False),
+    ],
+    ids=["a minute before", "14 days after its end"],
+)
+def test_a_week_can_change_until_14_days_after_its_end(
+    smard: FakeSmard, store: RawStore, clean: Path, now: datetime, asked: bool
+) -> None:
+    run(smard, store, clean)
+    smard.requests.clear()
+    run(smard, store, clean, now=now)
+    # The week of 22 September ends on the 29th at midnight in Paris.
+    week = f"{BASE}/254_DE_hour_{ms(datetime(2025, 9, 21, 22, tzinfo=UTC))}.json"
+    assert (week in smard.requests) is asked
+
+
+def test_full_asks_for_every_week_again(smard: FakeSmard, store: RawStore, clean: Path) -> None:
+    run(smard, store, clean)
+    smard.requests.clear()
+    run(smard, store, clean, now=datetime(2025, 10, 14, 15, tzinfo=PARIS), full=True)
+    assert len(smard.requests) == 5  # the index and the four weekly files
+
+
+JANUARY = date(2026, 1, 5)  # a Monday
+LATER = datetime(2026, 2, 6, 15, tzinfo=PARIS)  # a Friday afternoon
+
+
+def up_to_later(fake: FakeSmard) -> None:
+    """What SMARD has published by LATER: four whole weeks from 5 January, then the fifth up to
+    Saturday 7 February."""
+    for week in range(4):
+        fake.week("quarterhour", JANUARY + timedelta(weeks=week), price=quarterly)
+    fake.week("quarterhour", JANUARY + timedelta(weeks=4), count=6 * 96, price=quarterly)
+
+
+def test_a_week_kept_incomplete_is_asked_again_after_its_14_days(
+    store: RawStore, clean: Path
+) -> None:
+    fake = FakeSmard()
+    fake.week("quarterhour", JANUARY, count=4 * 96, price=quarterly)  # up to Thursday 8 January
+    wednesday = datetime(2026, 1, 7, 15, tzinfo=PARIS)
+    assert run(fake, store, clean, since=JANUARY, now=wednesday).errors == []
+    # The job does not run for a month; meanwhile SMARD completes the week and adds four more.
+    up_to_later(fake)
+    fake.requests.clear()
+    report = run(fake, store, clean, since=JANUARY, now=LATER)
+    assert fake.requests[1] == f"{BASE}/254_DE_quarterhour_{ms(day_bounds(JANUARY)[0])}.json"
+    assert report.errors == [] and report.warnings == []
+    assert prices(clean).height == 34 * 96  # 5 January to 7 February
+
+
+def test_an_old_week_received_with_an_unknown_shape_is_asked_again(
+    store: RawStore, clean: Path
+) -> None:
+    fake = FakeSmard()
+    up_to_later(fake)
+    fake.week("quarterhour", JANUARY, series={"prices": []})
+    with pytest.raises(SchemaError):
+        run(fake, store, clean, since=JANUARY, now=LATER)
+    fake.week("quarterhour", JANUARY, price=quarterly)  # SMARD fixes its file
+    report = run(fake, store, clean, since=JANUARY, now=LATER)
+    assert report.errors == [] and report.warnings == []
+
+
+def test_a_damaged_file_of_an_old_week_is_written_again(
+    smard: FakeSmard, store: RawStore, clean: Path
+) -> None:
+    run(smard, store, clean)
+    old = next(r for r in store.receipts("smard") if r.dataset == "prices-hour")
+    (store.root / old.path).write_bytes(b"damaged")
+    smard.requests.clear()
+    # The week of 22 September can no longer change, but its kept response no longer reads.
+    report = run(smard, store, clean, now=datetime(2025, 10, 14, 15, tzinfo=PARIS))
+    assert old.request in smard.requests
+    assert store.read(old) == smard.files[old.request]
+    assert not [error for error in report.errors if error.startswith("raw layer")]
+
+
+def test_the_last_week_of_the_index_ends_on_the_next_monday_in_paris() -> None:
+    # 26 October 2025 has 25 hours: the week of the 20th lasts 7 days and 1 hour.
+    start = datetime(2025, 10, 19, 22, tzinfo=UTC)
+    assert week_end(start) == datetime(2025, 10, 26, 23, tzinfo=UTC)
+
+
 def test_an_earlier_start_fetches_only_the_weeks_missing_from_the_archive(
     smard: FakeSmard, store: RawStore, clean: Path
 ) -> None:
@@ -213,7 +303,7 @@ def test_an_earlier_start_fetches_only_the_weeks_missing_from_the_archive(
     asked = [url.removeprefix(f"{BASE}/") for url in smard.requests]
     assert f"254_DE_hour_{ms(datetime(2025, 9, 14, 22, tzinfo=UTC))}.json" in asked
     assert f"254_DE_hour_{ms(datetime(2025, 9, 21, 22, tzinfo=UTC))}.json" in asked
-    assert len(asked) == 6  # the index, two missing weeks, and the last two weeks
+    assert len(asked) == 6  # the index, the two missing weeks, and three files that can change
 
 
 def test_the_weeks_are_asked_for_with_a_pause_between_them(
@@ -342,14 +432,6 @@ def test_a_gap_today_is_an_error_too(smard: FakeSmard, store: RawStore, clean: P
         price=lambda i: None if i == today else quarterly(i),
     )
     assert run(smard, store, clean).errors == ["2025-10-08: 1 of 96 quarter-hours missing"]
-
-
-def test_a_damaged_raw_file_is_an_error(smard: FakeSmard, store: RawStore, clean: Path) -> None:
-    run(smard, store, clean)
-    old = next(r for r in store.receipts("smard") if r.dataset == "prices-hour")
-    (store.root / old.path).write_bytes(b"damaged")
-    with pytest.raises(ValueError, match="damaged|does not match|Not a gzipped"):
-        run(smard, store, clean)
 
 
 def frame(*rows: tuple[datetime, float]) -> pl.DataFrame:
