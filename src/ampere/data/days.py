@@ -12,8 +12,18 @@ PARIS = ZoneInfo("Europe/Paris")
 QUARTER_HOUR = timedelta(minutes=15)
 
 
+def paris_day(instant: datetime) -> date:
+    """The Paris day an instant belongs to: 22:30 UTC on 1 June is already 2 June in Paris."""
+    if instant.utcoffset() is None:
+        raise ValueError("an instant needs a time zone: without one, it could be any time")
+    return instant.astimezone(PARIS).date()
+
+
 def day_bounds(day: date) -> tuple[datetime, datetime]:
     """The UTC start and end of a Paris day: from its midnight to the next one."""
+    # A datetime is also a date for Python: its own calendar date would slip in without a word.
+    if isinstance(day, datetime):
+        raise TypeError("a day is a date, not an instant: take its day with paris_day() first")
     start = datetime.combine(day, time(), PARIS)
     end = datetime.combine(day + timedelta(days=1), time(), PARIS)
     return start.astimezone(UTC), end.astimezone(UTC)

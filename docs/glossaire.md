@@ -112,7 +112,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
-**Écriture atomique** : écrire un fichier sous un nom temporaire, puis lui donner son nom définitif en une seule opération. Une coupure pendant l'écriture ne laisse jamais de fichier à moitié écrit sous le vrai nom (ADR 022).
+**Écriture atomique** : écrire un fichier sous un nom temporaire, puis lui donner son nom définitif en une seule opération. Un arrêt pendant l'écriture ne laisse jamais de fichier à moitié écrit sous le vrai nom. Contre une coupure de courant, il faut en plus forcer l'écriture sur le disque (`fsync`) avant le renommage : sinon, le système peut enregistrer le nouveau nom avant les données (ADR 022).
 
 **Empreinte** (SHA) : identifiant calculé à partir du contenu exact d'un objet, comme le commit d'une action GitHub ou une image Docker. Désigner l'action ou l'image par son empreinte plutôt que par une étiquette comme `v7` ou `3.13-slim`, que son auteur peut déplacer, garantit que ce qui tourne ne change pas sans une mise à jour visible, proposée par Dependabot. Les outils qu'une action télécharge ont leur propre version : la CI fixe celle de uv et vérifie sa somme SHA-256 (ADR 019 et 020).
 
@@ -138,7 +138,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **LTTB (*Largest-Triangle-Three-Buckets*)** : méthode de sous-échantillonnage qui réduit une longue série à quelques centaines de points en gardant sa forme visuelle, pics et creux compris. Elle rend les graphiques rapides sans les déformer.
 
-**Manifeste** : le registre d'une source dans la couche brute, `manifest.jsonl`. Il compte une ligne par fichier reçu : ce qui a été demandé, où le fichier est rangé, quand il est arrivé, et son empreinte SHA-256 (ADR 022).
+**Manifeste** : le registre d'une source dans la couche brute, `manifest.jsonl`. Il compte une ligne par fichier reçu : ce qui a été demandé, d'où vient la réponse, où le fichier est rangé, quand il est arrivé, et son empreinte SHA-256 (ADR 022).
 
 **Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute (ADR 021).
 
