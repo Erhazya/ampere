@@ -7,6 +7,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,7 @@ from ampere.sources.enedis import (
     Month,
     check,
     ingest,
+    late_months,
     metadata_url,
     months,
     parse_month,
@@ -35,6 +37,8 @@ PARIS = ZoneInfo("Europe/Paris")
 HALF = timedelta(minutes=30)
 SINCE = date(2026, 4, 1)
 PUBLISHED = "2026-07-30T09:51:18.221Z"
+# A later publication, first seen at LATER.
+REVISED = "2026-08-15T10:00:00.000Z"
 NOW = datetime(2026, 8, 10, 12, tzinfo=UTC)
 # Past the 7 days during which a publication has every month asked again.
 LATER = NOW + timedelta(days=8)
@@ -81,6 +85,8 @@ class FakeEnedis:
     def __init__(self) -> None:
         self.now = NOW
         self.published = {"conso-inf36-region": PUBLISHED, "prod-region": PUBLISHED}
+        # Another field of the metadata, which may change without a new publication.
+        self.count = 1
         self.first = date(2026, 4, 1)
         self.last = date(2026, 6, 30)
         # Added to the curves, when a test revises them.
@@ -91,6 +97,12 @@ class FakeEnedis:
         self.masked_totals: set[tuple[tuple[str, ...], datetime]] = set()
         # Rows Enedis leaves out: (segment, instant).
         self.missing: set[tuple[tuple[str, ...], datetime]] = set()
+        # Days whose count of sites grows by one at noon, in Paris: (segment, day).
+        self.site_changes: set[tuple[tuple[str, ...], date]] = set()
+        # Days at zero from end to end: (segment, day).
+        self.zero_days: set[tuple[tuple[str, ...], date]] = set()
+        # Instants where only curve n° 2 is masked: (segment, instant).
+        self.masked_second: set[tuple[tuple[str, ...], datetime]] = set()
         self.bodies: dict[str, bytes] = {}
         self.statuses: dict[str, int] = {}
         self.requests: list[str] = []
@@ -108,7 +120,12 @@ class FakeEnedis:
             body = (
                 self.bodies.get(url)
                 or json.dumps(
-                    {"id": "x", "slug": name, "dataUpdatedAt": self.published[name], "count": 1}
+                    {
+                        "id": "x",
+                        "slug": name,
+                        "dataUpdatedAt": self.published[name],
+                        "count": self.count,
+                    }
                 ).encode()
             )
             return httpx2.Response(
@@ -160,7 +177,11 @@ class FakeEnedis:
             return None
         local = moment.astimezone(PARIS)
         sites = int(1000 * factor) + local.day
-        if segment == FLAT and local.day != 15:
+        if (segment, local.date()) in self.site_changes and local.hour >= 12:
+            sites += 1
+        if (segment, local.date()) in self.zero_days:
+            mean = 0.0
+        elif segment == FLAT and local.day != 15:
             start, end = day_bounds(local.date())
             steps = [start + i * HALF for i in range((end - start) // HALF)]
             mean = sum(curve(step, factor) for step in steps) / len(steps)
@@ -182,8 +203,10 @@ class FakeEnedis:
             "sites": sites,
             "mean_1": None if curve_value is None else curve_value * 1.1,
             "index_1": index,
-            "mean_2": None if curve_value is None else curve_value * 0.9,
-            "index_2": index,
+            "mean_2": None
+            if curve_value is None or (segment, moment) in self.masked_second
+            else curve_value * 0.9,
+            "index_2": "S" if (segment, moment) in self.masked_second else index,
             "mean": curve_value,
             "index": index,
         }
@@ -257,11 +280,12 @@ def run(
     now: datetime = NOW,
     full: bool = False,
     pauses: list[float] | None = None,
+    since: date = SINCE,
 ) -> Report:
     fake.now = now
     with client(httpx2.MockTransport(fake.handle)) as http:
         sleep = pauses.append if pauses is not None else (lambda seconds: None)
-        return ingest(http, store, clean, now=now, since=SINCE, full=full, sleep=sleep)
+        return ingest(http, store, clean, now=now, since=since, full=full, sleep=sleep)
 
 
 def table(clean: Path, kind: str) -> pl.DataFrame:
@@ -401,6 +425,133 @@ def test_a_masked_total_is_no_error_but_a_missing_row_is_one(
         (pl.col("power_range") == roofs[0]) & (pl.col("start") == paris(2026, 5, 12, 21))
     )
     assert "total_w" not in measures["measure"].cast(str).to_list()
+    # The step of a day needs every half-hour of it, for a count of sites too.
+    solar = table(clean, "solar")
+    assert at(solar, roofs, "sites", paris(2026, 5, 13, 12))["step_minutes"] == 30
+    assert at(solar, roofs, "sites", paris(2026, 5, 14, 12))["step_minutes"] == 1440
+
+
+def test_a_curve_masked_alone_leaves_the_others_without_error(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    segment = ("RES2 (+ RES5)", "P3: ]6-9] kVA")
+    moment = paris(2026, 5, 12, 3)
+    fake.masked_second.add((segment, moment))
+    assert run(fake, store, clean) == Report()
+    measures = table(clean, "consumption").filter(
+        (pl.col("profile") == segment[0]) & (pl.col("start") == moment)
+    )
+    assert sorted(measures["measure"].cast(str)) == ["mean_1_w", "mean_w", "sites", "total_w"]
+
+
+def test_a_count_of_sites_that_changes_within_a_day_keeps_the_half_hour(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    segment = ("RES2 (+ RES5)", "P3: ]6-9] kVA")
+    fake.site_changes.add((segment, date(2026, 5, 13)))
+    run(fake, store, clean)
+    homes = table(clean, "consumption")
+    morning = at(homes, segment, "sites", paris(2026, 5, 13, 11))
+    afternoon = at(homes, segment, "sites", paris(2026, 5, 13, 13))
+    assert (morning["value"], morning["step_minutes"]) == (2013, 30)
+    assert (afternoon["value"], afternoon["step_minutes"]) == (2014, 30)
+    assert at(homes, segment, "sites", paris(2026, 5, 12, 11))["step_minutes"] == 1440
+
+
+def test_a_curve_at_zero_all_day_keeps_the_half_hour(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    # A mean of zero over a day means zero at each half-hour: nothing is negative.
+    roofs = ("P1 : ]0 - 3] kW",)
+    fake.zero_days.add((roofs, date(2026, 5, 20)))
+    run(fake, store, clean)
+    zero = at(table(clean, "solar"), roofs, "mean_w", paris(2026, 5, 20, 13))
+    assert (zero["value"], zero["step_minutes"]) == (0.0, 30)
+
+
+def test_a_flat_day_with_a_masked_half_hour_keeps_the_half_hour(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    # The step of a day needs every half-hour of it.
+    fake.masked.add((FLAT, paris(2026, 5, 14, 3)))
+    run(fake, store, clean)
+    assert (
+        at(table(clean, "consumption"), FLAT, "mean_w", paris(2026, 5, 14, 19))["step_minutes"]
+        == 30
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "last", "day", "half_hours", "published", "now"),
+    [
+        (date(2026, 3, 1), date(2026, 3, 31), date(2026, 3, 29), 46, "2026-04-10T10:00:00Z", 4),
+        (date(2025, 10, 1), date(2025, 10, 31), date(2025, 10, 26), 50, "2025-11-10T10:00:00Z", 11),
+    ],
+)
+def test_a_flat_day_of_a_clock_change_keeps_the_step_of_a_day(
+    fake: FakeEnedis,
+    store: RawStore,
+    clean: Path,
+    first: date,
+    last: date,
+    day: date,
+    half_hours: int,
+    published: str,
+    now: int,
+) -> None:
+    fake.first, fake.last = first, last
+    fake.published = dict.fromkeys(fake.published, published)
+    when = datetime(first.year, now, 20, tzinfo=UTC)
+    assert run(fake, store, clean, now=when, since=first) == Report()
+    start, end = day_bounds(day)
+    flat = table(clean, "consumption").filter(
+        (pl.col("profile") == FLAT[0])
+        & (pl.col("measure") == "mean_w")
+        & (pl.col("start") >= start)
+        & (pl.col("start") < end)
+    )
+    assert flat.height == half_hours
+    assert flat["step_minutes"].unique().to_list() == [1440]
+
+
+def test_a_publication_missing_from_the_clean_table_is_a_warning(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    # As after a run cut short: the publication has a new quarter, the clean table does not.
+    fake.published = dict.fromkeys(fake.published, "2026-09-15T10:00:00.000Z")
+    report = run(fake, store, clean, now=datetime(2026, 9, 20, tzinfo=UTC))
+    assert report.warnings == [
+        f"{kind}: the clean table ends at 2026-06-30 22:00 UTC, more than 60 days before the "
+        "publication of 2026-09-15: run --full"
+        for kind in ("consumption", "solar")
+    ]
+
+
+def test_a_month_neither_published_nor_kept_is_missing_for_good(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    # Once the window has slid, only a backup of the raw layer can bring its first months back.
+    fake.first = date(2026, 5, 1)
+    report = run(fake, store, clean)
+    assert len(report.errors) == 5 * 30  # three segments of homes and two of roofs, all April
+    assert "consumption RES4 P7: ]18-36] kVA 2026-04-15: 48 of 48 half-hours missing" in (
+        report.errors
+    )
+
+
+def test_a_row_missing_on_the_first_day_is_an_error(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    roofs = ("P2 : ]3 - 9] kW",)
+    fake.missing.add((roofs, paris(2026, 4, 1, 12)))
+    report = run(fake, store, clean)
+    assert report == Report(errors=["solar P2 : ]3 - 9] kW 2026-04-01: 1 of 48 half-hours missing"])
+
+
+def test_nothing_published_is_a_warning(fake: FakeEnedis, store: RawStore, clean: Path) -> None:
+    fake.first = date(2026, 9, 1)
+    report = run(fake, store, clean)
+    assert report == Report(warnings=["consumption: nothing published", "solar: nothing published"])
 
 
 def test_a_month_not_published_comes_back_empty_and_is_no_error(
@@ -417,21 +568,76 @@ def test_a_new_publication_has_every_month_asked_for_7_days(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     run(fake, store, clean)
-    kept = len(store.receipts("enedis"))
     fake.requests.clear()
-    run(fake, store, clean, now=NOW + timedelta(days=6))
-    assert asked(fake) == EVERYTHING
-    assert len(store.receipts("enedis")) == kept  # the same bytes add nothing
+    # The first publication ever seen dates from more than 7 days: nothing more to ask.
+    run(fake, store, clean, now=NOW + timedelta(days=1))
+    assert asked(fake) == METADATA
+    kept = len(store.receipts("enedis"))
+    fake.published = dict.fromkeys(fake.published, REVISED)
     fake.requests.clear()
     assert run(fake, store, clean, now=LATER) == Report()
+    assert asked(fake) == EVERYTHING
+    assert len(store.receipts("enedis")) == kept + 2  # the months are the same bytes
+
+
+@pytest.mark.parametrize(
+    ("delay", "everything"), [(timedelta(days=7, seconds=-1), True), (timedelta(days=7), False)]
+)
+def test_every_month_is_asked_until_7_days_after_the_first_reception(
+    fake: FakeEnedis, store: RawStore, clean: Path, delay: timedelta, everything: bool
+) -> None:
+    run(fake, store, clean)
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    run(fake, store, clean, now=LATER)
+    fake.requests.clear()
+    run(fake, store, clean, now=LATER + delay)
+    assert asked(fake) == (EVERYTHING if everything else METADATA)
+
+
+def test_the_first_publication_seen_is_new_for_7_days_from_its_own_date(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    fake.published = dict.fromkeys(fake.published, "2026-08-08T10:00:00.000Z")
+    run(fake, store, clean)
+    fake.requests.clear()
+    run(fake, store, clean, now=datetime(2026, 8, 15, 9, tzinfo=UTC))
+    assert asked(fake) == EVERYTHING
+    fake.requests.clear()
+    run(fake, store, clean, now=datetime(2026, 8, 15, 11, tzinfo=UTC))
     assert asked(fake) == METADATA
+
+
+def test_metadata_that_change_without_a_publication_do_not_start_it_again(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    run(fake, store, clean, now=LATER)
+    fake.count = 2  # a new metadata response, with the same publication
+    run(fake, store, clean, now=LATER + timedelta(days=5))
+    fake.requests.clear()
+    run(fake, store, clean, now=LATER + timedelta(days=7))
+    assert asked(fake) == METADATA
+
+
+def test_a_publication_that_comes_back_counts_from_its_return(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    fake.published = dict.fromkeys(fake.published, "2026-08-11T10:00:00.000Z")
+    run(fake, store, clean, now=NOW + timedelta(days=1))
+    fake.published = dict.fromkeys(fake.published, PUBLISHED)  # Enedis takes it back
+    run(fake, store, clean, now=NOW + timedelta(days=10))
+    fake.requests.clear()
+    run(fake, store, clean, now=NOW + timedelta(days=12))
+    assert asked(fake) == EVERYTHING
 
 
 def test_a_revised_publication_is_kept_and_used(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     run(fake, store, clean)
-    fake.published = dict.fromkeys(fake.published, "2026-10-29T10:00:00.000Z")
+    fake.published = dict.fromkeys(fake.published, REVISED)
     fake.revision = 1.0
     fake.last = date(2026, 7, 31)
     fake.requests.clear()
@@ -454,7 +660,7 @@ def test_a_month_enedis_no_longer_publishes_keeps_its_last_version(
 ) -> None:
     run(fake, store, clean)
     # The window slides: April leaves it.
-    fake.published = dict.fromkeys(fake.published, "2026-10-29T10:00:00.000Z")
+    fake.published = dict.fromkeys(fake.published, REVISED)
     fake.first = date(2026, 5, 1)
     report = run(fake, store, clean, now=LATER)
     assert report == Report()
@@ -464,6 +670,8 @@ def test_a_month_enedis_no_longer_publishes_keeps_its_last_version(
     assert len(april) == 2  # the empty answer is kept too
     homes = table(clean, "consumption")
     assert homes["start"].min() == paris(2026, 4, 1)
+    april_values = homes.filter(pl.col("start") == paris(2026, 4, 12))
+    assert april_values["received_at"].unique().to_list() == [NOW]
 
 
 def test_a_damaged_month_is_asked_again_outside_the_7_days(
@@ -482,13 +690,33 @@ def test_a_damaged_month_is_asked_again_outside_the_7_days(
     assert store.verify("enedis") == []
 
 
+def test_a_damaged_older_response_is_left_aside(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    fake.revision = 1.0
+    run(fake, store, clean, now=LATER)
+    older = next(
+        r for r in store.receipts("enedis") if (r.dataset, r.request) == ("consumption", "2026-05")
+    )
+    (store.root / older.path).write_bytes(b"damaged")
+    report = run(fake, store, clean, now=LATER + timedelta(days=8))
+    assert report.errors == [f"raw layer: {older.path}: Not a gzipped file (b'da')"]
+    segment = ("RES1 (+ RES1WE)", "P1: ]0-3] kVA")
+    moment = paris(2026, 5, 12, 19, 30)
+    assert at(table(clean, "consumption"), segment, "mean_w", moment)["value"] == pytest.approx(
+        2 * (home(moment, 1.0) + 1)
+    )
+
+
 def test_a_faulty_month_is_an_error_and_the_older_response_serves(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     run(fake, store, clean)
     (may,) = [m for m in months(CONSUMPTION, date(2026, 5, 1), date(2026, 5, 1))]
     fake.bodies[may.url] = b"not parquet"
-    fake.published = dict.fromkeys(fake.published, "2026-10-29T10:00:00.000Z")
+    fake.published = dict.fromkeys(fake.published, REVISED)
     report = run(fake, store, clean, now=LATER)
     assert report.errors[0].startswith(f"{may.url}: not a Parquet export")
     assert len(report.errors) == 1
@@ -511,7 +739,7 @@ def test_faulty_metadata_is_an_error_and_only_missing_months_are_asked(
     assert asked(fake) == EVERYTHING  # nothing kept yet: every month is missing
     fake.requests.clear()
     run(fake, store, clean, now=NOW + timedelta(days=1))
-    assert asked(fake) == [*METADATA, *(f"prod-region {month}" for month in MONTHS)]
+    assert asked(fake) == METADATA
 
 
 def test_an_error_of_enedis_stops_the_run(fake: FakeEnedis, store: RawStore, clean: Path) -> None:
@@ -540,7 +768,13 @@ def test_the_run_is_logged(
     run(fake, store, clean)
     assert caplog.text.count("new response kept in") == len(EVERYTHING)
     assert f"enedis: {len(EVERYTHING)} requests, {len(EVERYTHING)} new responses" in caplog.text
-    assert "conso-inf36-region: publication of 2026-07-30 09:51:18.221000+00:00" in caplog.text
+    assert "every month asked" not in caplog.text
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    run(fake, store, clean, now=LATER)
+    assert (
+        "conso-inf36-region: publication of 2026-08-15 10:00:00+00:00, every month asked"
+        in caplog.text
+    )
 
 
 def test_a_month_larger_than_the_limit_is_refused(
@@ -557,7 +791,7 @@ def test_a_value_outside_its_limits_keeps_the_clean_file_as_it_was(
 ) -> None:
     run(fake, store, clean)
     before = table(clean, "solar")
-    fake.published = dict.fromkeys(fake.published, "2026-10-29T10:00:00.000Z")
+    fake.published = dict.fromkeys(fake.published, REVISED)
     fake.revision = 5_000.0  # above 9 000 W once doubled
     report = run(fake, store, clean, now=LATER)
     assert any("outside 0 to 9000" in problem for problem in report.invalid)
@@ -566,6 +800,12 @@ def test_a_value_outside_its_limits_keeps_the_clean_file_as_it_was(
 
 MAY = Month(CONSUMPTION, paris(2026, 5, 1), paris(2026, 6, 1))
 URL = "https://example.test/may"
+
+
+def first_null(column: str) -> list[dict[str, object]]:
+    rows = may_rows()
+    rows[0][column] = None
+    return rows
 
 
 def may_rows(**changes: object) -> list[dict[str, object]]:
@@ -601,12 +841,21 @@ def test_an_empty_export_is_a_month_not_published() -> None:
         (export(may_rows(nb_points_soutirage="12")), "no column nb_points_soutirage"),
         (export(may_rows(horodate=datetime(2026, 4, 15, tzinfo=UTC))), "no column horodate"),
         (export(may_rows(horodate=datetime(2026, 4, 15))), "rows outside the month"),
+        # 1 June, 00:00 in Paris: the end of May, already outside it.
+        (export(may_rows(horodate=datetime(2026, 5, 31, 22))), "rows outside the month"),
         (export(may_rows(horodate=datetime(2026, 5, 15, 10, 10))), "instants off the half-hour"),
         (export(may_rows(code_region="11")), "a code_region other than 84"),
         (export(may_rows(profil="PRO1 (+ PRO1WE)")), "a profil that does not start with RES"),
         (export([*may_rows(), *may_rows()]), "a half-hour twice for a segment"),
         (export(may_rows(indice_representativite_courbe_ndeg1="12%")), "an unexpected indice"),
         (export(may_rows(courbe_moyenne_ndeg1_wh=float("nan"))), "not a finite number"),
+        (
+            export(may_rows(total_energie_soutiree_wh=Decimal("1.5"))),
+            "no column total_energie_soutiree_wh of the expected type",
+        ),
+        (export(first_null("horodate")), "a row without horodate"),
+        (export(first_null("code_region")), "a row without code_region"),
+        (export(first_null("profil")), "a row without profil"),
     ],
 )
 def test_a_month_must_keep_its_known_shape(content: bytes, message: str) -> None:
@@ -615,12 +864,59 @@ def test_a_month_must_keep_its_known_shape(content: bytes, message: str) -> None
     assert str(error.value).startswith(f"{URL}: ")
 
 
+def test_a_month_is_bounded_by_its_footer_before_it_is_read() -> None:
+    # Parquet compresses by itself: a small file could unfold into gigabytes of repeated rows.
+    rows = pl.DataFrame(may_rows())
+    many = rows.sample(n=500_001, with_replacement=True, seed=1)
+    with pytest.raises(SchemaError, match="500001 rows in 15 columns, more than a month"):
+        parse_month(export(many.to_dicts()), MAY, URL)
+    wide = rows.with_columns(pl.lit(0).alias(f"extra_{i}") for i in range(16))
+    with pytest.raises(SchemaError, match="3 rows in 31 columns, more than a month"):
+        parse_month(export(wide.to_dicts()), MAY, URL)
+
+
+def test_a_column_ampere_does_not_read_is_left_unread() -> None:
+    values = parse_month(export(may_rows(commentaire="une note")), MAY, URL)
+    assert "commentaire" not in values.columns
+    assert values.height > 0
+
+
+def test_a_longer_response_that_is_faulty_leaves_the_month_to_the_one_before(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    (may,) = months(CONSUMPTION, date(2026, 5, 1), date(2026, 5, 1))
+    good = fake.parquet("conso-inf36-region", may.start, may.end)
+    rows = pl.read_parquet(io.BytesIO(good))
+    stray = rows.head(1).with_columns(pl.col("horodate") + timedelta(days=40))
+    buffer = io.BytesIO()
+    pl.concat([rows, stray]).write_parquet(buffer)
+    fake.bodies[may.url] = buffer.getvalue()
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    report = run(fake, store, clean, now=LATER)
+    assert report.errors == [f"{may.url}: rows outside the month"]
+    assert report.warnings == [
+        "consumption 2026-05: the response received at 2026-08-10 12:00:00 UTC is used, the "
+        "last one being cut short or unreadable"
+    ]
+
+
+def test_a_panic_of_polars_is_a_faulty_month(monkeypatch: pytest.MonkeyPatch) -> None:
+    def panic(*args: object, **options: object) -> pl.DataFrame:
+        raise pl.exceptions.PanicException("index out of bounds")
+
+    monkeypatch.setattr(pl, "read_parquet", panic)
+    with pytest.raises(SchemaError, match="not a Parquet export"):
+        parse_month(b"PAR1", MAY, URL)
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [
         (b"[]", "no date of publication"),
         (b'{"dataUpdatedAt": "2026-07-30T09:51:18"}', "no date of publication"),
         (b"<html>", "not JSON"),
+        (b'{"dataUpdatedAt": "9999-12-31T23:59:59-01:00"}', "no date of publication"),
     ],
 )
 def test_the_metadata_must_give_the_date_of_the_publication(body: bytes, message: str) -> None:
@@ -661,10 +957,14 @@ def test_the_checks_count_each_half_hour_of_a_segment_with_the_clock_changes() -
 
 def test_the_checks_stop_at_the_last_half_hour_published() -> None:
     rows = clean_rows(date(2026, 10, 24), date(2026, 10, 25))  # 25 October: 50 half-hours
-    report = check(
-        rows, CONSUMPTION, since=date(2026, 10, 24), now=datetime(2026, 12, 1, tzinfo=UTC)
+    now = datetime(2026, 12, 1, tzinfo=UTC)
+    assert check(rows, CONSUMPTION, since=date(2026, 10, 24), now=now) == Report()
+    gap = rows.filter(
+        ~((pl.col("start") == paris(2026, 10, 25, 12)) & (pl.col("measure") == "sites"))
     )
-    assert report == Report()
+    assert check(gap, CONSUMPTION, since=date(2026, 10, 24), now=now) == Report(
+        errors=["consumption RES3 P1: ]0-9] kVA 2026-10-25: 1 of 50 half-hours missing"]
+    )
 
 
 @pytest.mark.parametrize(("days", "warned"), [(150, False), (151, True)])
@@ -677,6 +977,22 @@ def test_a_publication_late_by_a_month_is_a_warning(days: int, warned: bool) -> 
         "days ago"
     )
     assert report.warnings == ([expected] if warned else [])
+
+
+@pytest.mark.parametrize(
+    ("gap", "warned"), [(timedelta(days=60), False), (timedelta(days=60, seconds=1), True)]
+)
+def test_a_publication_more_than_60_days_after_the_clean_table_is_a_warning(
+    gap: timedelta, warned: bool
+) -> None:
+    last = paris(2026, 6, 30, 23, 30)
+    rows = pl.DataFrame(
+        [(last, "RES3", "P1: ]0-9] kVA", "sites", 10.0, 1440, NOW)],
+        schema=CONSUMPTION.schema,
+        orient="row",
+    )
+    assert bool(late_months(rows, CONSUMPTION, last + gap)) is warned
+    assert late_months(rows, CONSUMPTION, None) == []
 
 
 @pytest.mark.parametrize(
@@ -699,12 +1015,12 @@ def test_a_value_outside_its_limits_is_invalid(measure: str, value: float, probl
     assert report.invalid == [f"2026-05-12 08:00 UTC: consumption RES3 P1: ]0-9] kVA {problem}"]
 
 
-def test_a_half_hour_twice_or_off_the_grid_is_invalid() -> None:
+def test_an_instant_off_the_grid_is_invalid() -> None:
+    # A half-hour twice is a fault of the shape of its month, never an invalid row.
     moment = paris(2026, 5, 12, 10)
     rows = pl.DataFrame(
         [
             (moment, "RES3", "P1: ]0-9] kVA", "mean_w", 10.0, 30, NOW),
-            (moment, "RES3", "P1: ]0-9] kVA", "mean_w", 11.0, 30, NOW),
             (moment + timedelta(minutes=15), "RES3", "P1: ]0-9] kVA", "mean_w", 10.0, 30, NOW),
         ],
         schema=CONSUMPTION.schema,
@@ -712,7 +1028,6 @@ def test_a_half_hour_twice_or_off_the_grid_is_invalid() -> None:
     )
     report = check(rows, CONSUMPTION, since=date(2026, 5, 12), now=NOW)
     assert report.invalid == [
-        "2026-05-12 08:00 UTC: consumption RES3 P1: ]0-9] kVA mean_w 2 values",
         "2026-05-12 08:15:00 UTC: consumption RES3 P1: ]0-9] kVA mean_w not on the half-hour",
     ]
 

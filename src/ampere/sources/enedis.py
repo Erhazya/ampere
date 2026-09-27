@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 import httpx2
 import polars as pl
 
-from ampere.data.clean import Report, instants_per_day, write_parquet
+from ampere.data.clean import Report, write_parquet
 from ampere.data.days import PARIS, every_day, paris_day, paris_months, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 from ampere.sources.archive import JSON, fetch
@@ -45,9 +45,17 @@ PAUSE = 0.5
 MAX_METADATA_BYTES = 1_000_000
 # The largest month accepted: a month of residential consumption weighs 805 kB.
 MAX_MONTH_BYTES = 20_000_000
+# Parquet compresses by itself: a few kilobytes can hold millions of rows, which Polars would
+# unfold into gigabytes. The footer tells how many before any is read: a month of consumption has
+# 58,000 rows in 15 columns.
+MAX_ROWS = 500_000
+MAX_COLUMNS = 30
 # Enedis publishes a quarter about a month after its end: past this, a publication is late.
 STALE_AFTER = timedelta(days=150)
 HALF_HOUR = timedelta(minutes=30)
+# A publication covers up to about a month before its date: a clean table that ends much earlier
+# lacks some of it.
+LAGGING = timedelta(days=60)
 # The step of a value that stands for a whole day: a count of sites, or a curve that the
 # statistical secrecy only publishes as the mean of its day.
 DAY_MINUTES = 1440
@@ -60,6 +68,8 @@ CURVES = {
 }
 # The share of the sites of a segment in each curve, in %: a whole number, "< 1" for a sliver of
 # a large segment, or "S" when the curve is masked.
+# The instants of an export: UTC, although Parquet gives them without a time zone.
+STARTS = pl.col("horodate").dt.cast_time_unit("us").dt.replace_time_zone("UTC")
 INDICES = (
     "indice_representativite_courbe_ndeg1_ndeg2",
     "indice_representativite_courbe_ndeg1",
@@ -93,7 +103,8 @@ class Dataset:
         return pl.Schema(
             {
                 "start": pl.Datetime("us", "UTC"),
-                **dict.fromkeys(self.keys, pl.String()),
+                # Categories: a few labels, repeated over ten million rows.
+                **dict.fromkeys(self.keys, pl.Categorical()),
                 "measure": pl.Enum(MEASURES),
                 "value": pl.Float64(),
                 "step_minutes": pl.UInt16(),
@@ -180,6 +191,7 @@ def ingest(
     valid."""
     kept = len(store.receipts(SOURCE))
     report = Report()
+    publications: dict[str, datetime] = {}
     asked = 0
 
     def ask(dataset: str, request: str, url: str, extension: str) -> tuple[bytes, Receipt]:
@@ -205,23 +217,25 @@ def ingest(
         content, receipt = ask(PUBLICATION, dataset.name, metadata_url(dataset), "json")
         refresh = full
         try:
-            published = parse_publication(content, receipt.url)
+            published = publications[dataset.name] = parse_publication(content, receipt.url)
         except SchemaError as error:
             # Without the date of the publication, only the months without a readable response
             # are asked for.
             report.errors.append(str(error))
         else:
-            first = first_reception(store, dataset, published)
-            if receipt.received_at == first and now < first + REFRESH:
+            # A publication seen to replace another opens the window at its first reception;
+            # the first one ever seen, at its own date.
+            opened = first_reception(store, dataset, published) or published
+            if now < opened + REFRESH:
+                refresh = True
                 log.info("%s: publication of %s, every month asked", dataset.name, published)
-            refresh = refresh or now < first + REFRESH
         history = responses(store)
         for month in months(dataset, since, paris_day(now)):
             receipts = history.get((dataset.kind, month.name), [])
             if refresh or not receipts or not readable(store, receipts[-1], month):
                 content, receipt = ask(dataset.kind, month.name, month.url, "parquet")
                 try:
-                    parse_month(content, month, receipt.url)
+                    read_month(content, month, receipt.url)
                 except SchemaError as error:
                     # A faulty month is an error; the run goes on with what the raw layer has.
                     report.errors.append(str(error))
@@ -229,6 +243,7 @@ def ingest(
     for dataset in DATASETS:
         frame, warnings = build(store, history, dataset, since=since, today=paris_day(now))
         report.warnings.extend(warnings)
+        report.warnings.extend(late_months(frame, dataset, publications.get(dataset.name)))
         found = check(frame, dataset, since=since, now=now)
         report.invalid.extend(found.invalid)
         report.errors.extend(found.errors)
@@ -256,25 +271,26 @@ def responses(store: RawStore) -> dict[tuple[str, str], list[Receipt]]:
     return kept
 
 
-def first_reception(store: RawStore, dataset: Dataset, published: datetime) -> datetime:
-    """When the last publication of a dataset first came: the reception of the earliest of the
-    last metadata responses that give its date."""
+def first_reception(store: RawStore, dataset: Dataset, published: datetime) -> datetime | None:
+    """When the last publication of a dataset came to replace another: the reception of the
+    earliest of the last metadata responses that give its date. None when no earlier response
+    gives another date: the publication is then the first one ever seen."""
     receipts = responses(store).get((PUBLICATION, dataset.name), [])
-    first = receipts[-1].received_at
+    first = None
     for receipt in reversed(receipts):
         try:
             if parse_publication(store.read(receipt), receipt.url) != published:
-                break
+                return first
         except (DamagedRawFile, SchemaError):
-            break
+            return first
         first = receipt.received_at
-    return first
+    return None
 
 
 def readable(store: RawStore, receipt: Receipt, month: Month) -> bool:
     """Whether a kept response of a month still reads, logging why when it does not."""
     try:
-        parse_month(store.read(receipt), month, receipt.url)
+        read_month(store.read(receipt), month, receipt.url)
     except (DamagedRawFile, SchemaError) as error:
         log.warning(
             "%s %s: the last response is unusable (%s)", month.dataset.kind, month.name, error
@@ -299,20 +315,25 @@ def build(
     warnings = []
     for month in months(dataset, since, today):
         receipts = history.get((dataset.kind, month.name), [])
-        best: tuple[pl.DataFrame, Receipt] | None = None
-        last_rows: int | None = None
-        for receipt in receipts:
+        # The rows of each response, from its footer: only the one chosen is read whole.
+        footers: list[tuple[int, int, Receipt, bytes]] = []
+        for order, receipt in enumerate(receipts):
             try:
-                rows = parse_month(store.read(receipt), month, receipt.url)
+                content = store.read(receipt)
+                footers.append((footer(content, receipt.url)[0], order, receipt, content))
             except (DamagedRawFile, SchemaError):
                 continue
-            if receipt == receipts[-1]:
-                last_rows = rows.height
-            if best is None or rows.height >= best[0].height:
-                best = rows, receipt
+        last_rows = next((rows for rows, _, kept, _ in footers if kept == receipts[-1]), None)
+        best: tuple[pl.DataFrame, Receipt] | None = None
+        for _, _, receipt, content in sorted(footers, key=lambda found: found[:2], reverse=True):
+            try:
+                best = read_month(content, month, receipt.url), receipt
+                break
+            except SchemaError:
+                continue
         if best is None:
             continue
-        rows, receipt = best
+        raw, receipt = best
         if receipt != receipts[-1] and last_rows != 0:
             warnings.append(
                 f"{dataset.kind} {month.name}: the response received at "
@@ -320,14 +341,15 @@ def build(
                 "short or unreadable"
             )
         frames.append(
-            rows.with_columns(
+            month_values(raw, month).with_columns(
                 pl.lit(receipt.received_at, dtype=dataset.schema["received_at"]).alias(
                     "received_at"
                 )
             )
         )
-    frame = pl.concat(frames) if frames else dataset.schema.to_frame()
-    return frame.select(dataset.schema.names()).sort(*dataset.keys, "measure", "start"), warnings
+    # Month after month, each sorted within itself: a sort of the whole table would copy it.
+    frame = pl.concat(frames, rechunk=False) if frames else dataset.schema.to_frame()
+    return frame.select(dataset.schema.names()), warnings
 
 
 def parse_publication(content: bytes, url: str) -> datetime:
@@ -337,27 +359,63 @@ def parse_publication(content: bytes, url: str) -> datetime:
     if isinstance(value, str):
         try:
             moment = datetime.fromisoformat(value)
-        except ValueError:
-            pass
-        else:
             if moment.utcoffset() is not None:
                 return moment.astimezone(UTC)
+        except (ValueError, OverflowError):
+            pass
     raise SchemaError(f"{url}: no date of publication, dataUpdatedAt {value!r}")
 
 
 def parse_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
-    """The rows of a monthly export, after a check of their shape, in the long form of the clean
-    table but for the reception time; none when Enedis does not publish the month."""
-    dataset = month.dataset
+    """The values of a monthly export, in the long form of the clean table but for the reception
+    time; none when Enedis does not publish the month."""
+    return month_values(read_month(content, month, url), month)
+
+
+def footer(content: bytes, url: str) -> tuple[int, pl.Schema]:
+    """The number of rows and the columns of a Parquet export, read from its footer alone."""
     try:
-        raw = pl.read_parquet(io.BytesIO(content))
-    except (pl.exceptions.PolarsError, OSError) as error:
+        scan = pl.scan_parquet(io.BytesIO(content))
+        return scan.select(pl.len()).collect().item(), scan.collect_schema()
+    # Polars may even panic on a damaged file, and its panic is a BaseException: caught here, it
+    # makes the response faulty instead of stopping every run that reads it again.
+    except (pl.exceptions.PolarsError, pl.exceptions.PanicException, OSError) as error:
         raise SchemaError(f"{url}: not a Parquet export ({error})") from error
-    check_columns(raw, dataset, url)
-    starts = pl.col("horodate").dt.cast_time_unit("us").dt.replace_time_zone("UTC")
-    if raw.filter((starts < month.start) | (starts >= month.end)).height:
+
+
+def read_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
+    """The rows of a monthly export, as Enedis sends them, after a check of their shape: first
+    their number and their columns, from the footer, then the columns Ampère reads."""
+    dataset = month.dataset
+    rows, schema = footer(content, url)
+    if rows > MAX_ROWS or len(schema) > MAX_COLUMNS:
+        raise SchemaError(
+            f"{url}: {rows} rows in {len(schema)} columns, more than a month of Enedis holds"
+        )
+    columns = check_columns(schema, dataset, url)
+    try:
+        raw = pl.read_parquet(io.BytesIO(content), columns=columns)
+    except (pl.exceptions.PolarsError, pl.exceptions.PanicException, OSError) as error:
+        raise SchemaError(f"{url}: not a Parquet export ({error})") from error
+    try:
+        check_rows(raw, month, url)
+    except (pl.exceptions.PolarsError, pl.exceptions.PanicException) as error:
+        raise SchemaError(f"{url}: rows Polars cannot check ({error})") from error
+    return raw
+
+
+def check_rows(raw: pl.DataFrame, month: Month, url: str) -> None:
+    """The rows of a monthly export must be in the month, on the half-hour, of the region and
+    segments asked, once each, with known indices and finite numbers."""
+    dataset = month.dataset
+    sources = [source for source, _ in dataset.segment]
+    named = {"horodate", *sources, *(column for column, _ in dataset.allowed)}
+    for column in sorted(named):
+        if raw[column].null_count():
+            raise SchemaError(f"{url}: a row without {column}")
+    if raw.filter(~STARTS.is_between(month.start, month.end, closed="left")).height:
         raise SchemaError(f"{url}: rows outside the month")
-    if raw.filter(starts.dt.truncate("30m") != starts).height:
+    if raw.filter(STARTS.dt.truncate("30m") != STARTS).height:
         raise SchemaError(f"{url}: instants off the half-hour")
     for column, values in dataset.allowed:
         if raw.filter(~pl.col(column).is_in(pl.Series(values).implode())).height:
@@ -365,7 +423,6 @@ def parse_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
     for column, prefix in dataset.prefixed:
         if raw.filter(~pl.col(column).str.starts_with(prefix)).height:
             raise SchemaError(f"{url}: a {column} that does not start with {prefix}")
-    sources = [source for source, _ in dataset.segment]
     if raw.select(*sources, "horodate").is_duplicated().any():
         raise SchemaError(f"{url}: a half-hour twice for a segment")
     for column in INDICES:
@@ -376,8 +433,14 @@ def parse_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
     numbers = [dataset.total, *CURVES.values()]
     if raw.select(pl.any_horizontal(~pl.col(numbers).is_finite()).any()).item():
         raise SchemaError(f"{url}: a value that is not a finite number")
+
+
+def month_values(raw: pl.DataFrame, month: Month) -> pl.DataFrame:
+    """The values of the checked rows of a month, one per segment, measure and half-hour, with
+    their step, sorted in that order; a masked value is left out."""
+    dataset = month.dataset
     wide = raw.select(
-        starts.alias("start"),
+        STARTS.alias("start"),
         *(pl.col(source).alias(clean) for source, clean in dataset.segment),
         pl.col(dataset.sites).cast(pl.Float64).alias("sites"),
         (pl.col(dataset.total) * 2).alias("total_w"),
@@ -386,16 +449,23 @@ def parse_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
     long = wide.unpivot(
         index=["start", *dataset.keys], variable_name="measure", value_name="value"
     ).drop_nulls("value")
-    return with_steps(long, month).with_columns(pl.col("measure").cast(pl.Enum(MEASURES)))
+    return (
+        with_steps(long, month)
+        .with_columns(
+            pl.col(dataset.keys).cast(pl.Categorical()),
+            pl.col("measure").cast(pl.Enum(MEASURES)),
+        )
+        .sort(*dataset.keys, "measure", "start")
+    )
 
 
-def check_columns(raw: pl.DataFrame, dataset: Dataset, url: str) -> None:
-    """The columns a monthly export must have, with their types."""
+def check_columns(schema: pl.Schema, dataset: Dataset, url: str) -> list[str]:
+    """The columns a monthly export must have, with their types: those Ampère reads."""
     wanted: dict[str, Callable[[pl.DataType], bool]] = {
         "horodate": lambda dtype: isinstance(dtype, pl.Datetime) and dtype.time_zone is None,
         dataset.sites: lambda dtype: dtype.is_integer(),
-        dataset.total: lambda dtype: dtype.is_numeric(),
-        **dict.fromkeys(CURVES.values(), lambda dtype: dtype.is_numeric()),
+        dataset.total: lambda dtype: dtype.is_float() or dtype.is_integer(),
+        **dict.fromkeys(CURVES.values(), lambda dtype: dtype.is_float() or dtype.is_integer()),
         **dict.fromkeys(
             {column for column, _ in (*dataset.allowed, *dataset.prefixed, *dataset.segment)},
             lambda dtype: dtype == pl.String,
@@ -403,15 +473,17 @@ def check_columns(raw: pl.DataFrame, dataset: Dataset, url: str) -> None:
         **dict.fromkeys(INDICES, lambda dtype: dtype == pl.String),
     }
     for column, fits in wanted.items():
-        dtype = raw.schema.get(column)
+        dtype = schema.get(column)
         if dtype is None or not fits(dtype):
             raise SchemaError(f"{url}: no column {column} of the expected type, but {dtype}")
+    return list(wanted)
 
 
 def with_steps(long: pl.DataFrame, month: Month) -> pl.DataFrame:
-    """The step of each value: a day for a count of sites, and for a measure whose half-hours all
-    have the same value over a whole Paris day, the mean of the day that the statistical secrecy
-    publishes; a half-hour otherwise."""
+    """The step of each value: a day when all the half-hours of a whole Paris day have the same
+    value, as the count of sites Enedis gives by day, or the mean of a day that the statistical
+    secrecy publishes instead of a curve; a half-hour otherwise. A day at zero keeps the
+    half-hour: nothing negative, its half-hours are all known to be zero."""
     days = list(every_day(paris_day(month.start), paris_day(month.end - HALF_HOUR)))
     lengths = pl.DataFrame(
         {"day": days, "half_hours": [quarter_hours(day) // 2 for day in days]},
@@ -423,13 +495,18 @@ def with_steps(long: pl.DataFrame, month: Month) -> pl.DataFrame:
     )
     daily = (
         local.group_by(keys)
-        .agg(pl.col("value").n_unique().alias("distinct"), pl.len().alias("count"))
+        .agg(
+            pl.col("value").n_unique().alias("distinct"),
+            pl.col("value").first().alias("first"),
+            pl.len().alias("count"),
+        )
         .join(lengths, on="day")
         .select(
             *keys,
             (
-                (pl.col("measure") == "sites")
-                | ((pl.col("distinct") == 1) & (pl.col("count") == pl.col("half_hours")))
+                (pl.col("distinct") == 1)
+                & (pl.col("count") == pl.col("half_hours"))
+                & (pl.col("first") != 0)
             ).alias("daily"),
         )
     )
@@ -444,6 +521,19 @@ def with_steps(long: pl.DataFrame, month: Month) -> pl.DataFrame:
         )
         .drop("day", "daily")
     )
+
+
+def late_months(frame: pl.DataFrame, dataset: Dataset, published: datetime | None) -> list[str]:
+    """A warning when the clean table ends more than LAGGING before the last publication: a
+    publication covers up to about a month before its date, so that months of it are missing,
+    or still those of an earlier one, as after a run cut short. `--full` asks for them again."""
+    last = frame["start"].max()
+    if published is None or not isinstance(last, datetime) or published - last <= LAGGING:
+        return []
+    return [
+        f"{dataset.kind}: the clean table ends at {last + HALF_HOUR:%Y-%m-%d %H:%M} UTC, more "
+        f"than {LAGGING.days} days before the publication of {published:%Y-%m-%d}: run --full"
+    ]
 
 
 def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) -> Report:
@@ -461,16 +551,26 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
             f"{last + HALF_HOUR:%Y-%m-%d %H:%M} UTC, more than {STALE_AFTER.days} days ago"
         )
     days = list(every_day(since, paris_day(last)))
-    segments = frame.select(dataset.keys).unique().sort(dataset.keys).rows()
-    counts = {
-        (*segment, day): count
-        for *segment, day, count in instants_per_day(
-            frame.filter(pl.col("measure") == "sites"),
-            by=dataset.keys,
-            column="start",
-            every="30m",
-        ).rows()
-    }
+    # One count of sites per segment and half-hour: a double is a fault of the shape of its month,
+    # and an instant off the grid an invalid row. The streaming engine counts them without a copy
+    # of the millions of rows, and the segments come from its few thousand groups.
+    paris_date = pl.col("start").dt.convert_time_zone(PARIS.key).dt.date().alias("day")
+    grouped = (
+        frame.lazy()
+        .filter(pl.col("measure") == "sites")
+        .group_by(*dataset.keys, paris_date)
+        .len()
+        .collect(engine="streaming")
+    )
+    counts = {(*segment, day): count for *segment, day, count in grouped.rows()}
+    segments = (
+        frame.lazy()
+        .select(dataset.keys)
+        .unique()
+        .collect(engine="streaming")
+        .sort(dataset.keys)
+        .rows()
+    )
     for segment in segments:
         for day in days:
             expected = quarter_hours(day) // 2
@@ -484,30 +584,32 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
 
 
 def invalid_rows(frame: pl.DataFrame, dataset: Dataset) -> list[str]:
-    """The rows a clean file must not hold: a half-hour twice for a segment and a measure, an
-    instant off the half-hour, or a value outside the limits of its measure."""
+    """The rows a clean file must not hold: an instant off the half-hour, or a value outside the
+    limits of its measure.
+
+    A half-hour twice is a fault of the shape of its month (read_month), and two months never
+    overlap: looking for doubles among ten million rows would take a gigabyte for nothing.
+    """
     keys = [*dataset.keys, "measure", "start"]
-    duplicates = frame.group_by(keys).len().filter(pl.col("len") > 1).sort(keys)
-    invalid = [
-        f"{start:%Y-%m-%d %H:%M} UTC: {dataset.kind} {' '.join(segment)} {measure} {count} values"
-        for *segment, measure, start, count in duplicates.rows()
-    ]
     off_grid = frame.filter(pl.col("start").dt.truncate("30m") != pl.col("start")).sort(keys)
-    invalid.extend(
+    invalid = list(
         f"{start:%Y-%m-%d %H:%M:%S} UTC: {dataset.kind} {' '.join(segment)} {measure} not on "
         "the half-hour"
         for *segment, measure, start in off_grid.select(keys).rows()
     )
-    highest = {"sites": None, "total_w": None, **dict.fromkeys(CURVES, dataset.highest_mean)}
-    for measure, top in highest.items():
-        rows = frame.filter(pl.col("measure") == measure)
-        outside = rows.filter(
-            (pl.col("value") < 0) if top is None else ~pl.col("value").is_between(0, top)
-        ).sort(keys)
-        limits = "below 0" if top is None else f"outside 0 to {top:g}"
-        invalid.extend(
+    # One lazy pass over the table: only the rows out of bounds are ever copied.
+    curve = pl.col("measure").is_in(pl.Series(list(CURVES)).implode())
+    outside = (
+        frame.lazy()
+        .filter((pl.col("value") < 0) | (curve & (pl.col("value") > dataset.highest_mean)))
+        .select(*keys, "value")
+        .sort(keys)
+        .collect()
+    )
+    for *segment, measure, start, value in outside.rows():
+        limits = f"outside 0 to {dataset.highest_mean:g}" if measure in CURVES else "below 0"
+        invalid.append(
             f"{start:%Y-%m-%d %H:%M} UTC: {dataset.kind} {' '.join(segment)} {measure} "
             f"{value:g}, {limits}"
-            for *segment, start, value in outside.select(*dataset.keys, "start", "value").rows()
         )
     return invalid
