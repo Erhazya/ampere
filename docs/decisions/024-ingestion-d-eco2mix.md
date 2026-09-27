@@ -11,7 +11,7 @@ RTE publie éCO2mix sous Licence Ouverte 2.0, par la plateforme ODRÉ (Open Data
 - **des versions par paquets** : le jeu consolidé-définitif a été modifié pour la dernière fois le 30 juillet 2026, jusqu'au 30 juin, et le temps réel commence là où il s'arrête ;
 - **le national** : une ligne par quart d'heure. En consolidé et en définitif, la consommation et l'intensité CO₂ ne sont remplies qu'à l'heure pile et à la demi-heure, alors que la prévision J-1 l'est à chaque quart d'heure. En temps réel, tout est au quart d'heure, avec environ une heure de retard, et les lignes de demain ne portent que la prévision J-1 ;
 - **la région** (code 84) : une ligne par demi-heure en consolidé et en définitif, par quart d'heure en temps réel, avec la production solaire (`solaire`, en MW) et son taux de charge (`tch_solaire`, en %) ;
-- **le temps** : `date_heure` est en UTC ; `date` et `heure` sont à l'heure de Paris ;
+- **le temps** : `date_heure` est en UTC ; `date` et `heure` sont à l'heure de Paris, et ODRÉ range ses lignes selon elles. Le jour du passage à l'heure d'été, il donne aussi les quarts d'heure de 02:00 à 02:45, qui n'existent pas, aux instants UTC de 03:00 à 03:45 : les mesures sont les mêmes, la prévision répète la dernière valeur. Le jour du retour à l'heure d'hiver, il ne donne qu'une fois l'heure de 02:00, vécue deux fois : le second passage, de 01:00 à 01:59 UTC. Le premier, de 00:00 à 00:59 UTC, manque en 2023, 2024 et 2025, au national comme en région. Ces deux pièges sont apparus au premier vrai passage ;
 - **depuis juillet 2023** : aucune valeur ne manque, hors des quarts d'heure :15 et :45 du consolidé-définitif national (26 304 de chaque). La consommation va de 30 à 90 GW, l'intensité de 5 à 71 g/kWh, le solaire régional jusqu'à 3 254 MW pour un taux de charge de 96,8 % ;
 - **l'export d'un mois** (`/exports/json`, tous les champs) pèse 2,6 Mo pour le national (166 Ko en gzip) et 1,1 Mo pour la région (101 Ko), en moins d'une seconde. Deux exports identiques rendent les mêmes octets, dans un ordre qui n'est pas celui des dates, même avec `order_by`.
 
@@ -66,7 +66,7 @@ Option 1 dans les quatre cas.
   - un mois est redemandé à chaque passage jusqu'à 14 jours après sa fin, comme une semaine de SMARD (ADR 023). Au-delà, il ne l'est que si ODRÉ en offre une version plus avancée que la réponse gardée (temps réel, puis consolidée, puis définitive), ou si cette réponse ne se lit plus ou n'a pas toutes ses valeurs ;
   - `ampere ingest eco2mix --full` redemande tous les mois ;
   - chaque réponse passe par `get()` (ADR 022) : du JSON, de 20 Mo au plus. Une pause de 0,5 s sépare deux requêtes. Dans le brut, la source est `eco2mix`, et les jeux `coverage`, `national-tr`, `national-cons-def`, `regional-tr` et `regional-cons-def`.
-- **Schéma** : une réponse est une liste d'objets. Chaque ligne a un `date_heure` en UTC, une `nature` connue et des mesures numériques ou nulles ; une ligne régionale a le code 84. Sinon, le passage s'arrête avec l'adresse fautive, la réponse reste dans le brut, et le passage suivant la redemande.
+- **Schéma** : une réponse est une liste d'objets. Chaque ligne a un `date_heure` en UTC sur la grille du quart d'heure, une `nature` connue et des mesures numériques ou nulles ; une ligne régionale a le code 84 ; une valeur consolidée ou définitive à la demi-heure tombe sur une demi-heure. Deux lignes pour un même instant arrêtent tout, sauf si l'une porte une heure de Paris qui n'a jamais existé : elle est écartée. Sinon, le passage s'arrête avec l'adresse fautive, la réponse reste dans le brut, et le passage suivant la redemande.
 - **Nettoyé** : `clean/eco2mix/measures.parquet`, reconstruit en entier à chaque passage depuis la dernière réponse de chaque requête, avec une ligne par zone, mesure et quart d'heure :
   - `start` : le début du quart d'heure, en UTC ;
   - `area` : `FR` ou `ARA` ;
@@ -76,15 +76,17 @@ Option 1 dans les quatre cas.
   Une table longue plutôt qu'une colonne par mesure : chaque mesure a son pas et sa version, et une mesure de plus ne change pas le schéma. Une valeur à la demi-heure vaut pour ses deux quarts d'heure. On suppose qu'elle porte sur la demi-heure qui commence à son instant : le consolidé de juillet à septembre 2026, comparé au temps réel gardé dans le brut, dira si c'est juste. Pour chaque quart d'heure, la version la plus avancée l'emporte, puis la réponse reçue en dernier. Une valeur nulle reste absente, et le fichier n'est remplacé que si ses lignes sont valides, d'un seul coup (`write_atomically`, ADR 022).
 - **Contrôles**, pour chaque zone et chaque mesure, du 1er juillet 2023 à la veille :
   - ligne invalide : un quart d'heure en double, un instant hors de la grille, une valeur hors de ses bornes, ou une mesure datée après le passage (après la fin du lendemain pour la prévision). Les bornes : de 10 000 à 150 000 MW pour la consommation et la prévision, de 0 à 500 g/kWh pour l'intensité, de 0 à 20 000 MW pour le solaire, de 0 à 150 % pour le taux de charge. Le nettoyé garde alors sa version précédente ;
-  - erreur : des quarts d'heure manquants (en comptant 92 et 100 aux changements d'heure), ou un problème signalé par `verify()` sur la couche brute ;
+  - erreur : des quarts d'heure manquants, ou un problème signalé par `verify()` sur la couche brute. Un jour compte 96 quarts d'heure, 92 au passage à l'heure d'été, et 96 aussi au retour à l'heure d'hiver : sur ses 100 quarts d'heure, ODRÉ n'en donne jamais 4. Ce trou connu n'est pas comblé : ces quarts d'heure n'ont pas de ligne dans le nettoyé ;
   - avertissement : une dernière consommation en temps réel vieille de plus de 3 heures.
 
   Le jour même n'est pas contrôlé, puisque le temps réel a environ une heure de retard. Une ligne invalide ou une erreur donne le code de sortie 1.
 
 ## Conséquences
 
-- Le premier passage fait environ 80 requêtes ; les suivants, 2 pour les périodes des versions, puis le mois en cours et, jusqu'au 14, le précédent, pour chaque zone.
+- Le premier passage fait 80 requêtes, en deux minutes environ ; les suivants, 2 pour les périodes des versions, puis le mois en cours et, jusqu'au 14, le précédent, pour chaque zone. Le 27 septembre 2026, le brut d'éCO2mix pesait 11 Mo, et le nettoyé 568 684 valeurs en 2,6 Mo.
+- Un passage sans réponse nouvelle prend 25 s : 5 s pour savoir quels mois sont acquis, 10 s pour reconstruire le nettoyé, en relisant chaque mois, et 2 s pour les contrôles. Une lecture en colonnes deviendra nécessaire avec Enedis, près de dix fois plus volumineux.
+- La simulation devra traiter les 4 quarts d'heure qu'ODRÉ ne donne pas au retour à l'heure d'hiver, par une règle écrite, et non les combler en silence.
 - À la publication d'un trimestre consolidé, ses trois mois sont redemandés une fois ; à celle d'une année définitive, ses douze mois.
 - Le taux de charge peut dépasser 100 % si la puissance installée connue de RTE est en retard sur le parc : il est accepté jusqu'à 150 %.
 - Une révision d'un mois consolidé qui ne change pas sa version passe inaperçue, sauf avec `--full`.
-- Le code commun aux sources (le rapport des contrôles, l'écriture d'un fichier nettoyé, les jours de Paris) sort de `smard.py` pour servir aux deux.
+- Le code commun aux sources sort de `smard.py` pour servir aux deux : le rapport des contrôles, l'écriture d'un fichier nettoyé, les jours de Paris, la récupération d'une réponse dans le brut et le contrôle de sa forme.
