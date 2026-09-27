@@ -20,6 +20,8 @@ from ampere.sources.calendars import (
     HOLIDAYS_URL,
     SCHEMA,
     SCHOOL_URL,
+    Period,
+    check,
     ingest,
     parse_holidays,
     parse_school,
@@ -363,6 +365,7 @@ URL = "https://example.test/calendar"
         (b'{"2026-11-01": ""}', "an unexpected public holiday"),
         (b'{"2026-11-01": 1}', "an unexpected public holiday"),
     ],
+    ids=lambda value: value.decode() if isinstance(value, bytes) else None,
 )
 def test_the_public_holidays_must_keep_their_shape(body: bytes, message: str) -> None:
     with pytest.raises(SchemaError, match=message) as error:
@@ -376,13 +379,22 @@ def test_the_public_holidays_are_read_by_day() -> None:
     assert holidays[date(2026, 5, 14)] == "Ascension"
 
 
-def shifted(name: str, hours: int) -> list[dict[str, object]]:
+def shifted(name: str, column: str, hours: int) -> list[dict[str, object]]:
     rows = school_rows()
     for row in rows:
         if row["location"] == "Lyon" and row["description"] == name:
-            assert isinstance(row["start_date"], datetime)
-            row["start_date"] = row["start_date"] + timedelta(hours=hours)
+            instant = row[column]
+            assert isinstance(instant, datetime)
+            row[column] = instant + timedelta(hours=hours)
     return rows
+
+
+def naive_export() -> bytes:
+    """An export whose instants have no time zone."""
+    table = pl.read_parquet(io.BytesIO(school_export(school_rows())))
+    buffer = io.BytesIO()
+    table.with_columns(pl.col("start_date").dt.replace_time_zone(None)).write_parquet(buffer)
+    return buffer.getvalue()
 
 
 def lyon_with(**changes: object) -> list[dict[str, object]]:
@@ -399,8 +411,15 @@ def lyon_with(**changes: object) -> list[dict[str, object]]:
         (b"not parquet", "not a Parquet export"),
         (school_export(school_rows(), drop="location"), "no column location"),
         (school_export([row for row in school_rows() if row["location"] != "Lyon"]), "no school"),
-        # Midnight in UTC, not in Paris.
-        (school_export(shifted("Vacances de Noël", 1)), "does not start and end at midnight"),
+        # Not at midnight in Paris, at the start or at the end.
+        (
+            school_export(shifted("Vacances de Noël", "start_date", 1)),
+            "Vacances de Noël 2025-2026 does not start and end at midnight in Paris",
+        ),
+        (
+            school_export(shifted("Vacances de Noël", "end_date", -1)),
+            "Vacances de Noël 2025-2026 does not start and end at midnight in Paris",
+        ),
         (
             school_export(lyon_with(end_date=midnight(date(2025, 12, 19)))),
             "Vacances de Noël 2025-2026 ends before it starts",
@@ -410,8 +429,14 @@ def lyon_with(**changes: object) -> list[dict[str, object]]:
             "Vacances d'Hiver 2025-2026 overlaps Vacances de Noël",
         ),
         (school_export(lyon_with(annee_scolaire="2025")), "an unexpected school year, '2025'"),
+        (
+            school_export(lyon_with(annee_scolaire="2025-2027")),
+            "an unexpected school year, '2025-2027'",
+        ),
+        (naive_export(), "no column start_date of the expected type"),
         (school_export(lyon_with(description=None)), "a period of Lyon without its"),
     ],
+    ids=lambda value: value if isinstance(value, str) else "export",
 )
 def test_the_school_calendar_must_keep_its_shape(content: bytes, message: str) -> None:
     with pytest.raises(SchemaError, match=re.escape(message)) as error:
@@ -425,6 +450,56 @@ def test_the_school_calendar_is_bounded_by_its_footer() -> None:
     many = rows.sample(n=10_001, with_replacement=True, seed=1)
     with pytest.raises(SchemaError, match="10001 rows in 7 columns"):
         parse_school(school_export(many.to_dicts()), URL)
+    wide = rows.with_columns(pl.lit("x").alias(f"extra_{i}") for i in range(14))
+    buffer = io.BytesIO()
+    wide.write_parquet(buffer)
+    with pytest.raises(SchemaError, match=f"{rows.height} rows in 21 columns"):
+        parse_school(buffer.getvalue(), URL)
+
+
+def test_periods_that_follow_each_other_do_not_overlap() -> None:
+    # Christmas ends the day before a period that would start on the day classes resume.
+    rows = [
+        *school_rows(),
+        {
+            "description": "Journée de la neige",
+            "population": "-",
+            "start_date": midnight(date(2026, 1, 5)),
+            "end_date": midnight(date(2026, 1, 5)),
+            "location": "Lyon",
+            "zones": "Zone A",
+            "annee_scolaire": "2025-2026",
+        },
+    ]
+    periods = parse_school(school_export(rows), URL)
+    snow = next(p for p in periods if p.name == "Journée de la neige")
+    assert (snow.first, snow.last) == (date(2026, 1, 5), date(2026, 1, 5))
+
+
+def calendar_days(last: date) -> pl.DataFrame:
+    days = [SINCE + timedelta(days=i) for i in range((last - SINCE).days + 1)]
+    return pl.DataFrame(
+        {"day": days, "public_holiday": None, "school_holidays": None}
+    ).with_columns(pl.col("public_holiday", "school_holidays").cast(pl.String))
+
+
+# A school calendar long enough not to warn, with its usual holidays.
+FAR = [Period("Vacances d'Été", "2027-2028", date(2028, 7, 4), date(2028, 7, 4))]
+
+
+@pytest.mark.parametrize(
+    ("last", "failed"), [(date(2026, 9, 27), True), (date(2026, 9, 28), False)]
+)
+def test_the_days_must_reach_tomorrow(last: date, failed: bool) -> None:
+    report = check(calendar_days(last), FAR, since=SINCE, now=NOW)
+    assert report.failed is failed
+
+
+@pytest.mark.parametrize(("end", "warned"), [(date(2027, 9, 26), True), (date(2027, 9, 27), False)])
+def test_a_school_calendar_must_reach_a_year_ahead(end: date, warned: bool) -> None:
+    periods = [Period("Vacances d'Été", "2026-2027", date(2027, 7, 3), end)]
+    report = check(calendar_days(date(2027, 1, 1)), periods, since=SINCE, now=NOW)
+    assert bool(report.warnings) is warned
 
 
 def test_the_school_holidays_are_those_of_the_pupils_of_lyon() -> None:
