@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from unittest.mock import ANY, Mock
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import ampere
 from ampere import cli
+from ampere.sources import smard
 
 
 @pytest.fixture
@@ -123,3 +125,54 @@ def test_api_command_names_the_folder_in_full(
         cli.main(["api", "--dashboard", "web/dist"])
     assert f"no index.html in {Path.cwd() / 'web' / 'dist'}:" in capsys.readouterr().err
     run.assert_not_called()
+
+
+def test_data_init_creates_the_raw_layer_in_ampere_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "store"))
+    assert cli.main(["data", "init"]) == 0
+    assert (tmp_path / "store" / "raw" / ".ampere-raw").is_file()
+    assert str(tmp_path / "store" / "raw") in capsys.readouterr().out
+
+
+def test_the_data_folder_is_data_in_the_working_folder_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("AMPERE_DATA", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["data", "init"]) == 0
+    assert (tmp_path / "data" / "raw" / ".ampere-raw").is_file()
+
+
+def test_ingest_needs_a_raw_layer_created_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
+    assert cli.main(["ingest", "smard"]) == 1
+    assert "ampere data init" in caplog.text
+    assert not (tmp_path / "unmounted").exists()
+
+
+@pytest.mark.parametrize(("errors", "status"), [([], 0), (["2025-10-07: 1 of 96 missing"], 1)])
+def test_ingest_fails_when_the_checks_find_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    errors: list[str],
+    status: int,
+) -> None:
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path))
+    cli.main(["data", "init"])
+    calls: list[dict[str, object]] = []
+
+    def ingest(http: object, store: object, clean: Path, **options: object) -> smard.Report:
+        calls.append({"clean": clean, **options})
+        return smard.Report(errors=list(errors), warnings=["2025-10-09: 0 of 96 published so far"])
+
+    monkeypatch.setattr(smard, "ingest", ingest)
+    assert cli.main(["ingest", "smard", "--since", "2025-09-22"]) == status
+    assert calls[0]["clean"] == tmp_path / "clean"
+    assert calls[0]["since"] == date(2025, 9, 22)
+    assert "0 of 96 published so far" in caplog.text
+    assert all(error in caplog.text for error in errors)

@@ -93,7 +93,7 @@ class RawStore:
         if not (root / MARKER).is_file():
             raise FileNotFoundError(
                 f"{root.absolute()} is not a raw layer, it has no {MARKER} file: "
-                "create it once with RawStore.create()"
+                "create it once with `ampere data init`"
             )
         self.root = root
         self.manifests: dict[str, Manifest] = {}
