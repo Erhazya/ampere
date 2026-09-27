@@ -14,7 +14,7 @@ import httpx2
 import polars as pl
 import pytest
 
-from ampere.data.days import day_bounds
+from ampere.data.days import day_bounds, quarter_hours
 from ampere.data.http import UnexpectedResponse, client
 from ampere.data.raw import RawStore
 from ampere.sources.smard import (
@@ -485,6 +485,62 @@ def test_a_gap_today_is_an_error_too(smard: FakeSmard, store: RawStore, clean: P
     assert run(smard, store, clean).errors == ["2025-10-08: 1 of 96 quarter-hours missing"]
 
 
+def test_each_price_keeps_the_reception_time_of_its_own_file(store: RawStore) -> None:
+    fake = FakeSmard()
+    fake.week("hour", date(2025, 9, 22))
+    fake.week("quarterhour", date(2025, 10, 6), price=quarterly)
+    hour, quarter = fake.files
+
+    def keep(url: str, received_at: datetime) -> None:
+        store.save(
+            source="smard",
+            dataset="prices-hour" if url == hour else "prices-quarterhour",
+            request=url,
+            url=url,
+            content_type="application/json",
+            content=fake.files[url],
+            extension="json",
+            received_at=received_at,
+        )
+
+    first, second, third = (datetime(2025, 10, n, 12, tzinfo=UTC) for n in (1, 8, 9))
+    keep(hour, first)
+    keep(quarter, second)
+    fake.week("quarterhour", date(2025, 10, 6), price=lambda i: 7.5)  # a revision
+    keep(quarter, third)
+    built = build(store, since=date(2025, 9, 22))
+    times = built.group_by("market_step_minutes").agg(pl.col("received_at").unique())
+    assert dict(times.rows()) == {60: [first], 15: [third]}
+
+
+def test_the_clean_prices_are_in_time_order_even_when_old_weeks_arrive_last(
+    smard: FakeSmard, store: RawStore, clean: Path
+) -> None:
+    run(smard, store, clean, since=date(2025, 9, 29))
+    smard.week("hour", date(2025, 9, 15))
+    run(smard, store, clean, since=date(2025, 9, 15))
+    assert prices(clean)["start"].is_sorted()
+
+
+def test_a_failure_mid_run_keeps_what_was_received_and_the_last_clean_file(
+    smard: FakeSmard, store: RawStore, clean: Path
+) -> None:
+    run(smard, store, clean)
+    before = (clean / "smard" / "prices.parquet").read_bytes()
+    kept = len(store.receipts("smard"))
+    smard.week("quarterhour", date(2025, 9, 29), price=lambda i: 7.5)  # a revision
+    last = f"{BASE}/254_DE_quarterhour_{ms(day_bounds(date(2025, 10, 6))[0])}.json"
+    served = smard.files.pop(last)  # then SMARD fails on the last week
+    with pytest.raises(httpx2.HTTPStatusError):
+        run(smard, store, clean)
+    # The revision received before the failure stays in the archive; the clean file waits.
+    assert len(store.receipts("smard")) == kept + 1
+    assert (clean / "smard" / "prices.parquet").read_bytes() == before
+    smard.files[last] = served  # SMARD is back
+    assert run(smard, store, clean).errors == []
+    assert at(prices(clean), QUARTER_HOURS_FROM)["price_eur_per_mwh"] == 7.5
+
+
 def frame(*rows: tuple[datetime, float]) -> pl.DataFrame:
     received = datetime(2025, 10, 8, tzinfo=UTC)
     return pl.DataFrame(
@@ -493,8 +549,63 @@ def frame(*rows: tuple[datetime, float]) -> pl.DataFrame:
 
 
 def day(first: date, price: float = 50.0) -> list[tuple[datetime, float]]:
+    """Every quarter-hour of a Paris day: 92 or 100 on the days the clocks change."""
     start = day_bounds(first)[0]
-    return [(start + timedelta(minutes=15 * i), price) for i in range(96)]
+    return [(start + timedelta(minutes=15 * i), price) for i in range(quarter_hours(first))]
+
+
+@pytest.mark.parametrize(
+    ("now", "warned"),
+    [
+        (datetime(2025, 10, 8, 12, 0, tzinfo=UTC), True),  # 14:00 in Paris, summer time
+        (datetime(2025, 10, 8, 11, 59, tzinfo=UTC), False),
+        (datetime(2026, 3, 28, 13, 0, tzinfo=UTC), True),  # 14:00 in Paris, winter time
+        (datetime(2026, 3, 29, 12, 0, tzinfo=UTC), True),  # 14:00, the clocks went forward
+        (datetime(2026, 3, 29, 11, 59, tzinfo=UTC), False),
+    ],
+    ids=str,
+)
+def test_the_afternoon_is_counted_in_paris_when_now_is_in_utc(
+    store: RawStore, now: datetime, warned: bool
+) -> None:
+    today = now.astimezone(PARIS).date()
+    rows = [row for back in (2, 1, 0) for row in day(today - timedelta(days=back))]
+    report = check(frame(*rows), store, since=today - timedelta(days=2), now=now)
+    assert report.errors == [] and report.invalid == []
+    assert bool(report.warnings) is warned
+
+
+def test_today_is_the_paris_day_of_a_utc_now(store: RawStore) -> None:
+    now = datetime(2025, 10, 7, 22, 30, tzinfo=UTC)  # 00:30 on 8 October in Paris
+    report = check(frame(*day(date(2025, 10, 7))), store, since=date(2025, 10, 7), now=now)
+    assert report.errors == ["2025-10-08: 96 of 96 quarter-hours missing"]
+
+
+@pytest.mark.parametrize(
+    ("today", "published", "warned"),
+    [
+        (date(2026, 3, 28), 92, False),  # the 29th has 92 quarter-hours
+        (date(2026, 10, 24), 96, True),  # the 25th has 100
+        (date(2026, 10, 24), 100, False),
+    ],
+    ids=str,
+)
+def test_tomorrow_expects_its_own_count_on_a_clock_change(
+    store: RawStore, today: date, published: int, warned: bool
+) -> None:
+    rows = day(today) + day(today + timedelta(days=1))[:published]
+    afternoon = datetime(today.year, today.month, today.day, 15, tzinfo=PARIS)
+    report = check(frame(*rows), store, since=today, now=afternoon)
+    assert report.errors == [] and report.invalid == []
+    assert bool(report.warnings) is warned
+
+
+def test_the_day_the_clocks_go_back_needs_its_100_quarter_hours(store: RawStore) -> None:
+    rows = day(date(2025, 10, 26))[:96]
+    report = check(
+        frame(*rows), store, since=date(2025, 10, 26), now=datetime(2025, 10, 26, 12, tzinfo=PARIS)
+    )
+    assert report.errors == ["2025-10-26: 4 of 100 quarter-hours missing"]
 
 
 def test_the_checks_report_duplicates_and_quarter_hours_off_the_grid(store: RawStore) -> None:
