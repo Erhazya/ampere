@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 023).
+> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 024).
 
 ## Énergie et marché de l'électricité
 
@@ -17,6 +17,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Bilan énergétique** : à chaque instant, l'énergie qui entre dans un système est égale à celle qui en sort ou qui y est stockée. Vérifier le bilan à chaque pas de temps permet de détecter la plupart des erreurs de simulation.
 
 **Bourse de l'électricité (EPEX SPOT)** : plateforme où producteurs, fournisseurs et négociants achètent et vendent l'électricité. EPEX SPOT, la principale bourse en France, organise l'enchère du marché de la veille, qui fixe le prix spot. Elle vend ses données de marché, ce qui explique les restrictions sur leur republication.
+
+**Changements d'heure** : deux fois par an, la France passe à l'heure d'été, fin mars, de 2 h à 3 h, puis revient à l'heure d'hiver, fin octobre, de 3 h à 2 h. Ces jours-là comptent 92 et 100 quarts d'heure au lieu de 96. Le projet range tout en UTC, qui ne change jamais, et ne compte en heure de Paris que les jours. ODRÉ, qui range ses lignes en heures de Paris, donne au printemps l'heure qui n'existe pas, et à l'automne un seul des deux passages de l'heure vécue deux fois (ADR 024).
 
 **CRE (Commission de régulation de l'énergie)** : autorité indépendante qui fixe notamment les tarifs de réseau et propose les tarifs réglementés de vente.
 
@@ -108,7 +110,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Docker rootless** : Docker dont le démon tourne sous un compte ordinaire, sans droits d'administration. Le compte de développement du VPS s'en sert pour essayer les images avant un push, sans jamais toucher au Docker du système, dont l'accès équivaut à root (ADR 014 et 020). La démo en ligne tourne de la même façon, sous le compte `demos` de la plateforme du portfolio (ADR 021).
 
-**Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception.
+**Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception. Sur ODRÉ, le temps réel couvre les 90 derniers jours, et les versions consolidée et définitive arrivent par paquets de plusieurs mois. Le nettoyé d'Ampère prend chaque mois dans la version la plus avancée qui le couvre en entier (ADR 024).
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
@@ -142,6 +144,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute (ADR 021).
 
+**ODRÉ (Open Data Réseaux Énergies)** : la plateforme de données ouvertes des gestionnaires de réseaux d'énergie, dont RTE. Elle publie éCO2mix sous Licence Ouverte, par une API sans clé : quatre jeux, national et régional, en temps réel et en consolidé-définitif (ADR 024).
+
 **Origine** : ce qui identifie le site d'une page pour le navigateur : le protocole, le nom et le port, par exemple `https://ampere.exemple:443`. Par sécurité, une page ne peut lire que les réponses de sa propre origine, sauf autorisation CORS.
 
 **Page de repli** (*fallback*) : page qu'un serveur de fichiers renvoie quand le fichier demandé n'existe pas, par exemple `index.html` pour une application dont les pages sont gérées dans le navigateur. L'API n'en a pas : un chemin inconnu reçoit un 404 (ADR 018).
@@ -152,7 +156,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Polars** : bibliothèque de tableaux de données écrite en Rust, rapide et stricte sur les types, notamment les dates avec leur fuseau et les valeurs manquantes. Le projet l'utilise pour ses données, et ne passe à pandas que pour les bibliothèques qui l'exigent, comme pvlib (ADR 022).
 
-**Rattrapage** : ce que fait l'ingestion quand des données manquent dans l'archive, après une panne ou au premier passage : elle demande ce qui manque, en plus des jours récents, qu'une source peut encore corriger. Pour SMARD, une semaine est redemandée jusqu'à 14 jours après sa fin, puis tant que le brut n'en a pas une réponse lisible et complète (ADR 023).
+**Rattrapage** : ce que fait l'ingestion quand des données manquent dans l'archive, après une panne ou au premier passage : elle demande ce qui manque, en plus des jours récents, qu'une source peut encore corriger. Pour SMARD, une semaine est redemandée jusqu'à 14 jours après sa fin, puis tant que le brut n'en a pas une réponse lisible et complète (ADR 023). Pour éCO2mix, un mois est redemandé de la même façon, et aussi quand ODRÉ en publie une version plus avancée (ADR 024).
 
 **Réanalyse** : reconstitution de la météo passée par un modèle qui intègre toutes les observations disponibles (stations, satellites, ballons). C'est la « météo observée » la plus complète et la plus homogène ; ERA5 en est l'exemple le plus connu.
 
@@ -163,5 +167,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Run (d'un modèle météo)** : une exécution complète d'un modèle de prévision, lancée à heure fixe (par exemple à 00 h UTC). Chaque run produit une prévision pour les jours suivants ; il n'est disponible que quelques heures après son lancement.
 
 **Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018). La démo en ligne ne sert que le schéma : ces pages chargent leurs scripts depuis un CDN (ADR 021).
+
+**Table longue** : une table qui a une ligne par mesure et par instant, avec une colonne qui nomme la mesure, plutôt qu'une colonne par mesure. Chaque ligne porte ainsi son propre pas de temps et sa propre version, et une mesure de plus ne change pas le schéma. Le nettoyé d'éCO2mix est rangé ainsi (ADR 024).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke toutes les dates en UTC et ne les convertit en heure de Paris qu'à l'affichage. Il évite ainsi les pièges des journées de 23 et de 25 heures.

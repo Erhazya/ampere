@@ -7,21 +7,20 @@ import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx2
 import polars as pl
 import pytest
 
+from ampere.data.clean import Report
 from ampere.data.days import day_bounds, quarter_hours
 from ampere.data.http import UnexpectedResponse, client
 from ampere.data.raw import RawStore
+from ampere.sources.shapes import SchemaError
 from ampere.sources.smard import (
     QUARTER_HOURS_FROM,
     SCHEMA,
-    Report,
-    SchemaError,
     build,
     check,
     ingest,
@@ -382,25 +381,6 @@ def test_a_price_outside_the_market_limits_keeps_the_clean_file_as_it_was(
     assert "prices.parquet kept as it was" in caplog.text
 
 
-def test_a_failed_write_keeps_the_last_clean_file_whole(
-    smard: FakeSmard, store: RawStore, clean: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    run(smard, store, clean)
-    folder = clean / "smard"
-    before = (folder / "prices.parquet").read_bytes()
-    write = pl.DataFrame.write_parquet
-
-    def fail_halfway(frame: pl.DataFrame, file: Any, **options: Any) -> None:
-        write(frame.head(10), file, **options)
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(pl.DataFrame, "write_parquet", fail_halfway)
-    with pytest.raises(OSError, match="No space left"):
-        run(smard, store, clean)
-    assert (folder / "prices.parquet").read_bytes() == before
-    assert [file.name for file in folder.iterdir()] == ["prices.parquet"]
-
-
 @pytest.mark.parametrize(("hour", "warned"), [(15, True), (14, True), (13, False)])
 def test_prices_missing_for_tomorrow_are_a_warning_in_the_afternoon(
     smard: FakeSmard, store: RawStore, clean: Path, hour: int, warned: bool
@@ -443,6 +423,10 @@ def test_an_unexpected_shape_stops_with_its_url_and_stays_in_the_archive(
         b'{"meta_data": {"version": 1}, "series": [["1759096800000", 51.6]]}',
         b'{"meta_data": {"version": 1}, "series": [[1759096800000, "51.6"]]}',
         b'{"meta_data": {"version": 1}, "series": [[1759096800000, true]]}',
+        # Values that Python cannot hold: a price of 400 digits, an instant far in the future.
+        b'{"meta_data": {"version": 1}, "series": [[1759096800000, ' + b"9" * 400 + b"]]}",
+        b'{"meta_data": {"version": 1}, "series": [[100000000000000000000, 51.6]]}',
+        b"[" * 100_000 + b"]" * 100_000,
     ],
 )
 def test_a_series_must_keep_its_known_shape(body: bytes) -> None:

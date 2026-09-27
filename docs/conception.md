@@ -249,7 +249,7 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
   - l'intensité CO₂ nationale (champ `taux_co2`) ;
   - le taux de charge du solaire en Auvergne-Rhône-Alpes (champ `tch_solaire`), pour valider notre calcul solaire ;
   - la consommation nationale et la prévision J-1 de RTE, pour un banc d'essai facultatif de notre méthode de prévision.
-- **Pièges** : les champs date et heure locaux subissent les changements d'heure, alors que le champ `date_heure` est en UTC ; l'intensité CO₂ ne compte pas les importations (section 5.6).
+- **Pièges** : les champs date et heure locaux subissent les changements d'heure, alors que le champ `date_heure` est en UTC. ODRÉ range ses lignes en heures de Paris : il donne au printemps l'heure qui n'existe pas, aux instants de la suivante, et à l'automne un seul des deux passages de l'heure vécue deux fois (ADR 024). En consolidé et en définitif, les mesures nationales ne sont remplies qu'à la demi-heure, sur des lignes au quart d'heure. L'intensité CO₂ ne compte pas les importations (section 5.6).
 - **Licence** : Licence Ouverte 2.0, source à citer : « RTE, éCO2mix ».
 
 #### Enedis, consommation des foyers

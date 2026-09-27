@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import ANY, Mock
 
 import pytest
@@ -12,7 +13,9 @@ from fastapi.testclient import TestClient
 
 import ampere
 from ampere import cli
-from ampere.sources import smard
+from ampere.data.clean import Report
+from ampere.sources import eco2mix, smard
+from ampere.sources.shapes import SchemaError
 
 
 @pytest.fixture
@@ -167,15 +170,17 @@ def data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
-def fake_ingest(monkeypatch: pytest.MonkeyPatch, report: smard.Report) -> list[dict[str, object]]:
-    """Replace smard.ingest with a fake that records its arguments and returns the report."""
+def fake_ingest(
+    monkeypatch: pytest.MonkeyPatch, report: Report, source: ModuleType = smard
+) -> list[dict[str, object]]:
+    """Replace the ingest() of a source with a fake that records its arguments."""
     calls: list[dict[str, object]] = []
 
-    def ingest(http: object, store: object, clean: Path, **options: object) -> smard.Report:
+    def ingest(http: object, store: object, clean: Path, **options: object) -> Report:
         calls.append({"clean": clean, **options})
         return report
 
-    monkeypatch.setattr(smard, "ingest", ingest)
+    monkeypatch.setattr(source, "ingest", ingest)
     return calls
 
 
@@ -183,7 +188,7 @@ def test_ingest_passes_the_time_of_the_run_in_utc_and_the_full_option(
     monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="ampere")
-    calls = fake_ingest(monkeypatch, smard.Report())
+    calls = fake_ingest(monkeypatch, Report())
     assert cli.main(["ingest", "smard"]) == 0
     assert cli.main(["ingest", "smard", "--full"]) == 0
     first, second = calls
@@ -197,6 +202,20 @@ def test_ingest_passes_the_time_of_the_run_in_utc_and_the_full_option(
     assert date(2023, 7, 1) == smard.SINCE
     assert f"data folder: {data}" in caplog.text
     assert "smard: 0 invalid rows, 0 errors, 0 warnings" in caplog.text
+
+
+def test_ingest_eco2mix_runs_its_own_source(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ampere")
+    prices = fake_ingest(monkeypatch, Report())
+    measures = fake_ingest(monkeypatch, Report(warnings=["real time: no consumption"]), eco2mix)
+    assert cli.main(["ingest", "eco2mix", "--full"]) == 0
+    assert prices == []
+    assert measures[0]["clean"] == data / "clean" and measures[0]["full"] is True
+    assert date(2023, 7, 1) == eco2mix.SINCE
+    assert ("ampere", logging.WARNING, "real time: no consumption") in caplog.record_tuples
+    assert "eco2mix: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
 
 def test_ingest_has_no_option_to_shorten_the_history() -> None:
@@ -223,7 +242,7 @@ def test_ingest_fails_when_the_checks_find_problems(
     status: int,
 ) -> None:
     warnings = ["2025-10-09: 0 of 96 published so far"]
-    fake_ingest(monkeypatch, smard.Report(invalid=invalid, errors=errors, warnings=warnings))
+    fake_ingest(monkeypatch, Report(invalid=invalid, errors=errors, warnings=warnings))
     assert cli.main(["ingest", "smard"]) == status
     assert ("ampere", logging.WARNING, warnings[0]) in caplog.record_tuples
     for problem in [*invalid, *errors]:
@@ -233,9 +252,9 @@ def test_ingest_fails_when_the_checks_find_problems(
 def test_a_failed_ingestion_goes_up_instead_of_exiting_with_0(
     monkeypatch: pytest.MonkeyPatch, data: Path
 ) -> None:
-    def ingest(*args: object, **options: object) -> smard.Report:
-        raise smard.SchemaError("https://www.smard.de/app/chart_data/254/DE/x.json: no series")
+    def ingest(*args: object, **options: object) -> Report:
+        raise SchemaError("https://www.smard.de/app/chart_data/254/DE/x.json: no series")
 
     monkeypatch.setattr(smard, "ingest", ingest)
-    with pytest.raises(smard.SchemaError):
+    with pytest.raises(SchemaError):
         cli.main(["ingest", "smard"])

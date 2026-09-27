@@ -28,6 +28,7 @@ Chaque chiffre publié (README, vitrine, vidéo) figure ici avec le moyen de le 
 | Erreur de prévision (MAE) et score de compétence face aux références naïves | Section 7.3 | 5 |
 | Mémoire réelle de chaque conteneur sur le VPS | Section 8.5 | 6 |
 | Durée du traitement quotidien | Section 8.3 | 6 |
+| Décalage entre les demi-heures nationales d'éCO2mix, consolidées, et le temps réel gardé dans le brut, sur juillet à septembre 2026 | ADR 024 | 2, fin octobre 2026 |
 | Couverture des intervalles, gains du pilotage sur prévisions et du renforcement, taux de bonnes réponses et temps de réponse de l'assistant | Section 7 | Version complète |
 
 ## Mesures
