@@ -38,6 +38,8 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 
 ### Lancement en local (noms à confirmer)
 
+- `uv run ampere data init` : crée la couche brute des données, une seule fois, dans `AMPERE_DATA` (par défaut `data/`) (ADR 022).
+- `uv run ampere ingest smard` : récupère les prix spot de SMARD depuis le 1er juillet 2023, les archive, reconstruit `data/clean/smard/prices.parquet` et le contrôle. Le fichier n'est remplacé que si ses lignes sont valides ; une ligne invalide ou une erreur de contrôle donne le code de sortie 1. `--full` redemande toutes les semaines, pas seulement celles qui peuvent encore changer (ADR 023).
 - `uv run ampere daily` : traitement quotidien complet (ingestion avec rattrapage, contrôles, simulation, prévision, export).
 - `uv run ampere api` : lance l'API FastAPI sur `127.0.0.1:8000`, avec ses routes sous `/api`. Avec `--dashboard web/dist`, elle sert aussi le tableau de bord construit, comme en ligne (ADR 018).
 - `npm run dev`, dans `web/` : lance le tableau de bord sur `127.0.0.1:5173`, qui relaie `/api` vers l'API (ADR 016 et 018).
@@ -87,4 +89,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Déploiement automatique et retour arrière essayés le 26 septembre 2026 (mesure 8 du socle) ; la mesure définitive suit la fusion suivante.
 - Incrément 6 terminé le 27 septembre 2026 : dépôt public, `main` protégée, analyse des secrets de GitHub, alertes et correctifs Dependabot, actions limitées à une liste et désignées par leur empreinte, workflows des comptes extérieurs soumis à approbation.
 - Étape 2 (données) commencée le 27 septembre 2026. Incrément 2.1, les fondations des données (ADR 022) : les journées de Paris bornées en UTC, la couche brute (durable, verrouillée, vérifiable, créée une fois avec `RawStore.create`) avec son manifeste, et l'accès HTTP aux sources, qui ne laisse passer que des réponses attendues.
-- Prochaine action : l'incrément 2.2, les prix de SMARD de bout en bout (brut, nettoyé, contrôles, rattrapage).
+- Incrément 2.2, les prix de SMARD de bout en bout (ADR 023) : 113 760 quarts d'heure depuis le 1er juillet 2023, au pas du marché de leur époque, contrôlés jour par jour ; le premier passage fait 172 requêtes en 100 s, les suivants 4 (5 le dimanche après-midi), en 5 s. Une semaine est relue jusqu'à 14 jours après sa fin, puis tant que sa réponse gardée est illisible ou incomplète.
+- Prochaine action : l'incrément 2.3, RTE éCO2mix.

@@ -1,9 +1,13 @@
 """Command line of the project: `ampere <command>`."""
 
 import argparse
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ampere import __version__
+
+log = logging.getLogger("ampere")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,12 +33,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="leave out the documentation pages, /api/docs and /api/redoc, like the deployed "
         "demo; the schema stays at /api/openapi.json",
     )
+
+    data = commands.add_parser("data", help="manage the data folder: AMPERE_DATA, or data/")
+    actions = data.add_subparsers(dest="action", required=True)
+    actions.add_parser("init", help="create the raw layer, once, before the first ingestion")
+
+    ingest = commands.add_parser(
+        "ingest", help="fetch a source into the raw layer, then rebuild and check its clean data"
+    )
+    ingest.add_argument("source", choices=["smard"])
+    ingest.add_argument(
+        "--full",
+        action="store_true",
+        help="ask again for every week since 1 July 2023, not only those that can still change "
+        "(about 170 requests)",
+    )
     return parser
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Run a command; its return value is the exit status."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if args.command == "data":
+        return init_data()
+    if args.command == "ingest":
+        return ingest_source(full=args.full)
     if args.command == "api":
         # Imported here, so that other commands start fast.
         import uvicorn
@@ -48,3 +73,42 @@ def main(argv: list[str] | None = None) -> None:
         # One process. Given an app object, uvicorn cannot start more, and without workers=1
         # it would read their number from WEB_CONCURRENCY, then refuse to start.
         uvicorn.run(app, host=args.host, port=args.port, workers=1)
+    return 0
+
+
+def init_data() -> int:
+    from ampere.data.folders import data_root
+    from ampere.data.raw import RawStore
+
+    store = RawStore.create(data_root() / "raw")
+    print(f"Raw layer ready in {store.root}")
+    return 0
+
+
+def ingest_source(*, full: bool) -> int:
+    """Ingest SMARD, the only source so far; invalid rows and errors make the exit status 1."""
+    from ampere.data.folders import data_root
+    from ampere.data.http import client
+    from ampere.data.raw import RawStore
+    from ampere.sources import smard
+
+    root = data_root()
+    log.info("data folder: %s", root)
+    try:
+        store = RawStore(root / "raw")
+    except FileNotFoundError as error:
+        log.error("%s", error)
+        return 1
+    with client() as http:
+        report = smard.ingest(http, store, root / "clean", now=datetime.now(UTC), full=full)
+    for warning in report.warnings:
+        log.warning("%s", warning)
+    for problem in [*report.invalid, *report.errors]:
+        log.error("%s", problem)
+    log.info(
+        "smard: %d invalid rows, %d errors, %d warnings",
+        len(report.invalid),
+        len(report.errors),
+        len(report.warnings),
+    )
+    return 1 if report.failed else 0
