@@ -444,6 +444,21 @@ def test_the_school_calendar_must_keep_its_shape(content: bytes, message: str) -
     assert str(error.value).startswith(f"{URL}: ")
 
 
+@pytest.mark.parametrize("name", ["scan_parquet", "read_parquet"])
+def test_a_panic_of_polars_is_a_faulty_school_calendar(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    # The footer and the rows: Polars may panic in each, and its panic is a BaseException.
+    content = school_export(school_rows())
+
+    def panic(*args: object, **options: object) -> pl.DataFrame:
+        raise pl.exceptions.PanicException("index out of bounds")
+
+    monkeypatch.setattr(pl, name, panic)
+    with pytest.raises(SchemaError, match="not a Parquet export"):
+        parse_school(content, URL)
+
+
 def test_the_school_calendar_is_bounded_by_its_footer() -> None:
     # Parquet compresses by itself: a small file could unfold into millions of rows.
     rows = pl.DataFrame(school_rows())
