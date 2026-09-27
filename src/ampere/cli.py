@@ -41,12 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = commands.add_parser(
         "ingest", help="fetch a source into the raw layer, then rebuild and check its clean data"
     )
-    ingest.add_argument("source", choices=["smard"])
+    ingest.add_argument("source", choices=["smard", "eco2mix"])
     ingest.add_argument(
         "--full",
         action="store_true",
-        help="ask again for every week since 1 July 2023, not only those that can still change "
-        "(about 170 requests)",
+        help="ask again for the whole history since 1 July 2023, not only what can still change "
+        "(about 170 requests for SMARD, 80 for éCO2mix)",
     )
     return parser
 
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "data":
         return init_data()
     if args.command == "ingest":
-        return ingest_source(full=args.full)
+        return ingest_source(args.source, full=args.full)
     if args.command == "api":
         # Imported here, so that other commands start fast.
         import uvicorn
@@ -85,12 +85,14 @@ def init_data() -> int:
     return 0
 
 
-def ingest_source(*, full: bool) -> int:
-    """Ingest SMARD, the only source so far; invalid rows and errors make the exit status 1."""
+def ingest_source(name: str, *, full: bool) -> int:
+    """Ingest a source; invalid rows and errors make the exit status 1."""
     from ampere.data.folders import data_root
     from ampere.data.http import client
     from ampere.data.raw import RawStore
-    from ampere.sources import smard
+    from ampere.sources import eco2mix, smard
+
+    ingest = {"smard": smard.ingest, "eco2mix": eco2mix.ingest}[name]
 
     root = data_root()
     log.info("data folder: %s", root)
@@ -100,13 +102,14 @@ def ingest_source(*, full: bool) -> int:
         log.error("%s", error)
         return 1
     with client() as http:
-        report = smard.ingest(http, store, root / "clean", now=datetime.now(UTC), full=full)
+        report = ingest(http, store, root / "clean", now=datetime.now(UTC), full=full)
     for warning in report.warnings:
         log.warning("%s", warning)
     for problem in [*report.invalid, *report.errors]:
         log.error("%s", problem)
     log.info(
-        "smard: %d invalid rows, %d errors, %d warnings",
+        "%s: %d invalid rows, %d errors, %d warnings",
+        name,
         len(report.invalid),
         len(report.errors),
         len(report.warnings),
