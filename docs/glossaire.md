@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 022).
+> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 023).
 
 ## Énergie et marché de l'électricité
 
@@ -151,6 +151,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Point de santé (`/healthz`)** : route qui répond tant que le processus tourne. La plateforme du portfolio l'interroge pour savoir si une démo est en vie. Le tableau de bord interroge la même fonction sous `/api/healthz` pour afficher l'état de l'API, et le contrôle de santé de l'image Docker l'interroge en GET toutes les 30 secondes (ADR 020).
 
 **Polars** : bibliothèque de tableaux de données écrite en Rust, rapide et stricte sur les types, notamment les dates avec leur fuseau et les valeurs manquantes. Le projet l'utilise pour ses données, et ne passe à pandas que pour les bibliothèques qui l'exigent, comme pvlib (ADR 022).
+
+**Rattrapage** : ce que fait l'ingestion quand des données manquent dans l'archive, après une panne ou au premier passage : elle demande ce qui manque, en plus des jours récents, qu'une source peut encore corriger. Pour SMARD, ce sont les semaines absentes du brut et les deux dernières (ADR 023).
 
 **Réanalyse** : reconstitution de la météo passée par un modèle qui intègre toutes les observations disponibles (stations, satellites, ballons). C'est la « météo observée » la plus complète et la plus homogène ; ERA5 en est l'exemple le plus connu.
 

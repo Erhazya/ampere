@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 et 2 (ADR 012 à 022).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 et 2 (ADR 012 à 023).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 
@@ -290,7 +290,7 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 - **Usage** : caler notre calcul solaire, en comparant les productions mensuelles et annuelles typiques à Lyon.
 - **Licence** : réutilisation autorisée en citant la source, selon la [politique de la Commission](https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis/general-information/usage-conditions-data-protection_en). Source à citer : « PVGIS, Commission européenne (JRC) ».
 
-#### SMARD, prix spot *(ADR 003)*
+#### SMARD, prix spot *(ADR 003 et 023)*
 
 - **Contenu** : le prix du marché de la veille pour la zone France (filtre `254`, « Marktpreis: Frankreich »). SMARD le reprend d'ENTSO-E ; c'est la plateforme de la Bundesnetzagentur, le régulateur allemand de l'énergie.
 - **Pas de temps et historique** : quart d'heure depuis le 1er octobre 2025, heure auparavant ; depuis 2015, en fichiers hebdomadaires. La semaine en cours est disponible.
@@ -509,6 +509,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [020](decisions/020-image-docker-sur-ghcr.md) | Image Docker de la démo, construite par la CI et publiée sur GHCR | Acceptée |
 | [021](decisions/021-demo-en-ligne.md) | Démo en ligne, déployée par la plateforme du socle | Acceptée |
 | [022](decisions/022-fondations-des-donnees.md) | Fondations des données : Polars, httpx2, et une couche brute faite des octets reçus | Acceptée |
+| [023](decisions/023-ingestion-des-prix-smard.md) | Ingestion des prix spot de SMARD | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
