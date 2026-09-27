@@ -3,7 +3,8 @@
 Each response is stored compressed in gzip, under raw/<source>/<dataset>/<year>/<month>/, and the
 manifest of its source, raw/<source>/manifest.jsonl, gets one line per file. A response identical
 to the last one received for the same request adds nothing: running an ingestion again leaves the
-archive as it is.
+archive as it is. A source whose responses change at every call, while their data do not, gives a
+fingerprint of what must match (ADR 025).
 
 This layer is the only copy of what the sources sent. Each file reaches the disk (fsync) before the
 manifest line that records it, so that even a power cut never leaves a line without its file.
@@ -18,7 +19,7 @@ import os
 import re
 import tempfile
 import zlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -116,11 +117,13 @@ class RawStore:
         content: bytes,
         extension: str,
         received_at: datetime | None = None,
+        fingerprint: Callable[[bytes], bytes] | None = None,
     ) -> Saved:
         """Keep a response, unless it is the same as the last one received for this request.
 
-        The reception time is now when not given. A file lost or damaged since it was kept is
-        written again from an identical response.
+        The same means identical or, given a fingerprint, with the same fingerprint: the file kept
+        then stays the first one received. The reception time is now when not given. A file lost
+        or damaged since it was kept is written again from an identical response.
         """
         for name in (source, dataset, extension):
             check_name(name)
@@ -135,6 +138,8 @@ class RawStore:
             last = manifest.last.get((dataset, request))
             if last is not None and last.sha256 == sha256:
                 self.repair(last, content)
+                return Saved(last, new=False)
+            if last is not None and fingerprint and self.alike(last, content, fingerprint):
                 return Saved(last, new=False)
             path = PurePosixPath(
                 source,
@@ -262,6 +267,18 @@ class RawStore:
         manifest.size = manifest.end = path.stat().st_size
         manifest.add(receipt)
         self.manifests[receipt.source] = manifest
+
+    def alike(
+        self, receipt: Receipt, content: bytes, fingerprint: Callable[[bytes], bytes]
+    ) -> bool:
+        """Whether a response has the fingerprint of a kept file. A damaged file vouches for
+        nothing: the response is then kept beside it."""
+        try:
+            kept = self.read(receipt)
+        except DamagedRawFile as error:
+            log.warning("%s; the new response is kept beside it", error)
+            return False
+        return fingerprint(kept) == fingerprint(content)
 
     def repair(self, receipt: Receipt, content: bytes) -> None:
         """Write a lost or damaged file again, from an identical response."""
