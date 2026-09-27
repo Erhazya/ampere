@@ -41,6 +41,7 @@ FIXED = {
     "12-25": "Jour de Noël",
 }
 MOVABLE = {
+    2024: {"04-01": "Lundi de Pâques", "05-09": "Ascension", "05-20": "Lundi de Pentecôte"},
     2025: {"04-21": "Lundi de Pâques", "05-29": "Ascension", "06-09": "Lundi de Pentecôte"},
     2026: {"04-06": "Lundi de Pâques", "05-14": "Ascension", "05-25": "Lundi de Pentecôte"},
     2027: {"03-29": "Lundi de Pâques", "05-06": "Ascension", "05-17": "Lundi de Pentecôte"},
@@ -287,15 +288,19 @@ def test_each_calendar_keeps_the_reception_time_of_its_response(
 
 
 def test_only_the_last_faulty_response_is_an_error(
-    fake: FakeCalendars, store: RawStore, clean: Path
+    fake: FakeCalendars, store: RawStore, clean: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     # Two faulty responses after a good one: the older of them is only logged.
     run(fake, store, clean)
     fake.holidays = b"<html>"
     run(fake, store, clean, now=NOW + timedelta(days=1))
     fake.holidays = b"<html><body>"
+    caplog.set_level(logging.WARNING)
     report = run(fake, store, clean, now=NOW + timedelta(days=2))
     assert [error.split(" (")[0] for error in report.errors] == [f"{HOLIDAYS_URL}: not JSON"]
+    assert "public-holidays: the response received at 2026-09-28 12:00:00+00:00 does not read" in (
+        caplog.text
+    )
     assert on(days(clean), date(2025, 11, 1)) == ("Toussaint", "Vacances de la Toussaint")
 
 
@@ -333,6 +338,8 @@ def test_days_that_end_before_tomorrow_are_an_error(
     fake.holidays = holidays_json(range(2025, 2026))
     report = run(fake, store, clean)
     assert report.errors == ["calendars: the days end on 2025-12-31, before tomorrow, 2026-09-28"]
+    # As for every source, the checks keep a file as it was only for invalid rows (ADR 022).
+    assert days(clean)["day"].max() == date(2025, 12, 31)
 
 
 def test_a_school_calendar_that_ends_within_a_year_is_a_warning(
@@ -346,17 +353,40 @@ def test_a_school_calendar_that_ends_within_a_year_is_a_warning(
     ]
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Vacances de la Toussaint",
+        "Vacances de Noël",
+        "Vacances d'Hiver",
+        "Vacances de Printemps",
+        "Vacances d'Été",
+    ],
+)
 def test_a_school_year_without_its_usual_holidays_is_a_warning(
-    fake: FakeCalendars, store: RawStore, clean: Path
+    fake: FakeCalendars, store: RawStore, clean: Path, name: str
 ) -> None:
-    fake.school = school_export(
-        school_rows([p for p in LYON if p[:2] != ("2025-2026", "Vacances de Noël")])
-    )
+    fake.school = school_export(school_rows([p for p in LYON if p[:2] != ("2025-2026", name)]))
     report = run(fake, store, clean)
     # The last school year, still partly published, is not checked.
-    assert report.warnings == [
-        "calendars: the school year 2025-2026 of Lyon has no Vacances de Noël"
-    ]
+    assert report.warnings == [f"calendars: the school year 2025-2026 of Lyon has no {name}"]
+
+
+def test_a_school_year_missing_at_the_start_is_a_warning(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    # The summer of 2025 opens the history: its school year only matters for it.
+    fake.school = school_export(school_rows([p for p in LYON if p[0] != "2024-2025"]))
+    report = run(fake, store, clean)
+    assert report.warnings == ["calendars: the school year 2024-2025 of Lyon has no Vacances d'Été"]
+
+
+def test_no_day_since_the_start_of_the_history_is_an_error(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    fake.holidays = holidays_json(range(2024, 2025))
+    report = run(fake, store, clean)
+    assert "calendars: no day known since 2025-07-01" in report.errors
 
 
 def test_an_error_of_a_source_stops_the_run(
@@ -406,6 +436,18 @@ URL = "https://example.test/calendar"
         (b'{"20261101": "Toussaint"}', "an unexpected public holiday"),
         (b'{"2026-11-01": ""}', "an unexpected public holiday"),
         (b'{"2026-11-01": 1}', "an unexpected public holiday"),
+        # A year cut short between two whole ones.
+        (
+            json.dumps(
+                {
+                    **json.loads(holidays_json(range(2025, 2026))),
+                    "2026-01-01": "1er janvier",
+                    "2026-05-01": "1er mai",
+                    **json.loads(holidays_json(range(2027, 2028))),
+                }
+            ).encode(),
+            "2 public holidays in 2026, not 10 or 11",
+        ),
     ],
     ids=lambda value: value.decode() if isinstance(value, bytes) else None,
 )
@@ -477,6 +519,32 @@ def lyon_with(**changes: object) -> list[dict[str, object]]:
         ),
         (naive_export(), "no column start_date of the expected type"),
         (school_export(lyon_with(description=None)), "a period of Lyon without its"),
+        (school_export(lyon_with(population=None)), "a period of Lyon without its population"),
+        # A population the code does not know: its periods would vanish unseen.
+        (school_export(lyon_with(population="Tous")), "an unexpected population of Lyon, 'Tous'"),
+        (
+            school_export(lyon_with(population="Élèves du premier degré")),
+            "an unexpected population of Lyon, 'Élèves du premier degré'",
+        ),
+        # A whole school year missing between two others.
+        (
+            school_export(school_rows([p for p in LYON if p[0] != "2025-2026"])),
+            "no school holidays of Lyon in 2025-2026",
+        ),
+        (
+            school_export(lyon_with(end_date=midnight(date(2026, 6, 1)))),
+            "Vacances de Noël 2025-2026 lasts 163 days, more than 75",
+        ),
+        # A date that stands for an end not known yet, out of the calendar of Python.
+        (
+            school_export(
+                lyon_with(
+                    start_date=datetime(9999, 12, 31, 23, tzinfo=UTC),
+                    end_date=datetime(9999, 12, 31, 23, tzinfo=UTC),
+                )
+            ),
+            "has a date out of range",
+        ),
     ],
     ids=lambda value: value if isinstance(value, str) else "export",
 )
@@ -540,23 +608,46 @@ def calendar_days(last: date) -> pl.DataFrame:
     ).with_columns(pl.col("public_holiday", "school_holidays").cast(pl.String))
 
 
-# A school calendar long enough not to warn, with its usual holidays.
+# A school calendar long enough not to warn, and public holidays from 2025 to 2028.
 FAR = [Period("Vacances d'Été", "2027-2028", date(2028, 7, 4), date(2028, 7, 4))]
+HOLIDAYS = parse_holidays(holidays_json(range(2025, 2029)), "https://example.test/holidays")
 
 
 @pytest.mark.parametrize(
     ("last", "failed"), [(date(2026, 9, 27), True), (date(2026, 9, 28), False)]
 )
 def test_the_days_must_reach_tomorrow(last: date, failed: bool) -> None:
-    report = check(calendar_days(last), FAR, since=SINCE, now=NOW)
+    report = check(calendar_days(last), FAR, HOLIDAYS, since=SINCE, now=NOW)
     assert report.failed is failed
 
 
 @pytest.mark.parametrize(("end", "warned"), [(date(2027, 9, 26), True), (date(2027, 9, 27), False)])
 def test_a_school_calendar_must_reach_a_year_ahead(end: date, warned: bool) -> None:
     periods = [Period("Vacances d'Été", "2026-2027", date(2027, 7, 3), end)]
-    report = check(calendar_days(date(2027, 1, 1)), periods, since=SINCE, now=NOW)
-    assert bool(report.warnings) is warned
+    report = check(calendar_days(date(2027, 1, 1)), periods, HOLIDAYS, since=SINCE, now=NOW)
+    ahead = f"calendars: the school calendar of Lyon ends on {end}, less than a year ahead"
+    assert (ahead in report.warnings) is warned
+
+
+@pytest.mark.parametrize(
+    ("years", "problem"),
+    [
+        # The public holidays must cover the start of the history…
+        (range(2026, 2029), "error"),
+        # …and reach a year ahead, as the school calendar.
+        (range(2025, 2027), "warning"),
+    ],
+)
+def test_the_public_holidays_must_cover_the_history_and_a_year_ahead(
+    years: range, problem: str
+) -> None:
+    holidays = parse_holidays(holidays_json(years), URL)
+    report = check(calendar_days(date(2026, 12, 31)), FAR, holidays, since=SINCE, now=NOW)
+    if problem == "error":
+        assert report.errors == ["calendars: the public holidays start in 2026, after 2025-07-01"]
+    else:
+        ahead = "calendars: the public holidays end on 2026-12-31, less than a year ahead"
+        assert ahead in report.warnings
 
 
 def test_the_school_holidays_are_those_of_the_pupils_of_lyon() -> None:
