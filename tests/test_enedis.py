@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -56,6 +57,8 @@ HOMES = {
 }
 FLAT = ("RES4", "P7: ]18-36] kVA")
 ROOFS = {"P1 : ]0 - 3] kW": 1.0, "P2 : ]3 - 9] kW": 2.0}
+# The datasets of Ampère, with only the segments of homes that the fake publishes.
+DATASETS = (replace(CONSUMPTION, expected=tuple(HOMES)), SOLAR)
 
 
 def paris(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
@@ -91,10 +94,8 @@ class FakeEnedis:
         self.last = date(2026, 6, 30)
         # Added to the curves, when a test revises them.
         self.revision = 0.0
-        # Curves masked by the statistical secrecy: (segment, instant).
+        # Half-hours masked by the statistical secrecy: (segment, instant).
         self.masked: set[tuple[tuple[str, ...], datetime]] = set()
-        # Totals it masks, which it does too for rooftop solar.
-        self.masked_totals: set[tuple[tuple[str, ...], datetime]] = set()
         # Rows Enedis leaves out: (segment, instant).
         self.missing: set[tuple[tuple[str, ...], datetime]] = set()
         # Days whose count of sites grows by one at noon, in Paris: (segment, day).
@@ -188,8 +189,10 @@ class FakeEnedis:
         else:
             mean = curve(moment, factor)
         mean += self.revision
-        # The secrecy masks a curve, never the total of its segment.
+        # The secrecy masks the curves, and the total of rooftop solar with them, never that of
+        # homes.
         masked = (segment, moment) in self.masked
+        solar = len(segment) == 1
         curve_value = None if masked else mean
         # Each half of a large segment may stand for less than 1 % of its sites.
         index = (
@@ -199,7 +202,7 @@ class FakeEnedis:
             "horodate": moment.replace(tzinfo=None),
             "region": "Auvergne-Rhône-Alpes",
             "code_region": "84",
-            "total": None if (segment, moment) in self.masked_totals else mean * sites,
+            "total": None if masked and solar else mean * sites,
             "sites": sites,
             "mean_1": None if curve_value is None else curve_value * 1.1,
             "index_1": index,
@@ -210,11 +213,11 @@ class FakeEnedis:
             "mean": curve_value,
             "index": index,
         }
-        if len(segment) == 2:
-            row["profil"], row["plage"] = segment
-        else:
+        if solar:
             row["plage"] = segment[0]
             row["filiere"] = "F5 : Solaire"
+        else:
+            row["profil"], row["plage"] = segment
         return row
 
 
@@ -285,7 +288,9 @@ def run(
     fake.now = now
     with client(httpx2.MockTransport(fake.handle)) as http:
         sleep = pauses.append if pauses is not None else (lambda seconds: None)
-        return ingest(http, store, clean, now=now, since=since, full=full, sleep=sleep)
+        return ingest(
+            http, store, clean, now=now, since=since, full=full, sleep=sleep, datasets=DATASETS
+        )
 
 
 def table(clean: Path, kind: str) -> pl.DataFrame:
@@ -417,14 +422,15 @@ def test_a_masked_total_is_no_error_but_a_missing_row_is_one(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     roofs = ("P1 : ]0 - 3] kW",)
-    fake.masked_totals.add((roofs, paris(2026, 5, 12, 21)))
+    fake.masked.add((roofs, paris(2026, 5, 12, 21)))
     fake.missing.add((roofs, paris(2026, 5, 13, 21)))
     report = run(fake, store, clean)
     assert report == Report(errors=["solar P1 : ]0 - 3] kW 2026-05-13: 1 of 48 half-hours missing"])
     measures = table(clean, "solar").filter(
         (pl.col("power_range") == roofs[0]) & (pl.col("start") == paris(2026, 5, 12, 21))
     )
-    assert "total_w" not in measures["measure"].cast(str).to_list()
+    # For rooftop solar, the secrecy masks the total with the curves: the count of sites stays.
+    assert measures["measure"].cast(str).to_list() == ["sites"]
     # The step of a day needs every half-hour of it, for a count of sites too.
     solar = table(clean, "solar")
     assert at(solar, roofs, "sites", paris(2026, 5, 13, 12))["step_minutes"] == 30
@@ -548,10 +554,10 @@ def test_a_row_missing_on_the_first_day_is_an_error(
     assert report == Report(errors=["solar P2 : ]3 - 9] kW 2026-04-01: 1 of 48 half-hours missing"])
 
 
-def test_nothing_published_is_a_warning(fake: FakeEnedis, store: RawStore, clean: Path) -> None:
+def test_nothing_published_is_an_error(fake: FakeEnedis, store: RawStore, clean: Path) -> None:
     fake.first = date(2026, 9, 1)
     report = run(fake, store, clean)
-    assert report == Report(warnings=["consumption: nothing published", "solar: nothing published"])
+    assert report == Report(errors=["consumption: nothing published", "solar: nothing published"])
 
 
 def test_a_month_not_published_comes_back_empty_and_is_no_error(
@@ -674,16 +680,60 @@ def test_a_month_enedis_no_longer_publishes_keeps_its_last_version(
     assert april_values["received_at"].unique().to_list() == [NOW]
 
 
+def test_an_empty_month_between_published_ones_is_a_warning_and_asked_again(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    (may,) = months(CONSUMPTION, date(2026, 5, 1), date(2026, 5, 1))
+    fake.bodies[may.url] = frame("conso-inf36-region", [])
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    report = run(fake, store, clean, now=LATER)
+    assert report == Report(
+        warnings=[
+            "consumption 2026-05: the last response is empty, the one received at 2026-08-10 "
+            "12:00:00 UTC is used"
+        ]
+    )
+    assert table(clean, "consumption").filter(pl.col("start") == paris(2026, 5, 12)).height > 0
+    fake.requests.clear()
+    del fake.bodies[may.url]
+    assert run(fake, store, clean, now=LATER + timedelta(days=8)) == Report()
+    assert asked(fake) == [METADATA[0], "conso-inf36-region 2026-05", METADATA[1]]
+
+
+def test_a_publication_with_fewer_rows_replaces_the_one_before(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    # The last publication wins: the half-hour it lacks is an error, not a reason to keep the
+    # values it revises.
+    run(fake, store, clean)
+    segment = ("RES2 (+ RES5)", "P3: ]6-9] kVA")
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    fake.revision = 1.0
+    fake.missing.add((segment, paris(2026, 5, 12, 3)))
+    report = run(fake, store, clean, now=LATER)
+    assert report == Report(
+        errors=["consumption RES2 (+ RES5) P3: ]6-9] kVA 2026-05-12: 1 of 48 half-hours missing"]
+    )
+    moment = paris(2026, 5, 12, 19, 30)
+    assert at(table(clean, "consumption"), segment, "mean_w", moment)["value"] == pytest.approx(
+        2 * (home(moment, 2.0) + 1)
+    )
+
+
 def test_a_damaged_month_is_asked_again_outside_the_7_days(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     run(fake, store, clean)
-    may = next(
-        r for r in store.receipts("enedis") if (r.dataset, r.request) == ("solar", "2026-05")
-    )
-    (store.root / may.path).write_bytes(b"damaged")
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    fake.revision = 1.0
+    run(fake, store, clean, now=LATER)
+    may = [r for r in store.receipts("enedis") if (r.dataset, r.request) == ("solar", "2026-05")]
+    assert len(may) == 2
+    (store.root / may[-1].path).write_bytes(b"damaged")
     fake.requests.clear()
-    report = run(fake, store, clean, now=LATER)
+    report = run(fake, store, clean, now=LATER + timedelta(days=8))
+    # The last response is the one that counts, although the one before still reads.
     assert asked(fake) == [*METADATA, "prod-region 2026-05"]
     # The damaged file comes back whole from an identical response.
     assert report == Report()
@@ -721,8 +771,8 @@ def test_a_faulty_month_is_an_error_and_the_older_response_serves(
     assert report.errors[0].startswith(f"{may.url}: not a Parquet export")
     assert len(report.errors) == 1
     assert report.warnings == [
-        "consumption 2026-05: the response received at 2026-08-10 12:00:00 UTC is used, the "
-        "last one being cut short or unreadable"
+        "consumption 2026-05: the last response does not read, the one received at 2026-08-10 "
+        "12:00:00 UTC is used"
     ]
     homes = table(clean, "consumption")
     assert homes.filter(pl.col("start") == paris(2026, 5, 12)).height > 0
@@ -740,6 +790,27 @@ def test_faulty_metadata_is_an_error_and_only_missing_months_are_asked(
     fake.requests.clear()
     run(fake, store, clean, now=NOW + timedelta(days=1))
     assert asked(fake) == METADATA
+
+
+def test_faulty_metadata_start_the_7_days_again_at_the_next_reception(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    run(fake, store, clean, now=LATER)
+    fake.bodies[metadata_url(CONSUMPTION)] = b"<html>"
+    run(fake, store, clean, now=LATER + timedelta(days=1))
+    del fake.bodies[metadata_url(CONSUMPTION)]
+    run(fake, store, clean, now=LATER + timedelta(days=2))
+    fake.requests.clear()
+    run(fake, store, clean, now=LATER + timedelta(days=8))
+    # What Enedis published before the faulty response is unknown: for consumption, the 7 days
+    # start again at the reception that follows it; for solar, they are over.
+    assert asked(fake) == [
+        "metadata conso-inf36-region",
+        *(f"conso-inf36-region {month}" for month in MONTHS),
+        "metadata prod-region",
+    ]
 
 
 def test_an_error_of_enedis_stops_the_run(fake: FakeEnedis, store: RawStore, clean: Path) -> None:
@@ -796,6 +867,28 @@ def test_a_value_outside_its_limits_keeps_the_clean_file_as_it_was(
     report = run(fake, store, clean, now=LATER)
     assert any("outside 0 to 9000" in problem for problem in report.invalid)
     assert table(clean, "solar").equals(before)
+
+
+def test_invalid_values_of_one_dataset_leave_the_other_replaced(
+    fake: FakeEnedis, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    before = table(clean, "consumption")
+    (may,) = months(CONSUMPTION, date(2026, 5, 1), date(2026, 5, 1))
+    rows = pl.read_parquet(io.BytesIO(fake.parquet("conso-inf36-region", may.start, may.end)))
+    buffer = io.BytesIO()
+    rows.with_columns(pl.col("total_energie_soutiree_wh").neg()).write_parquet(buffer)
+    fake.bodies[may.url] = buffer.getvalue()
+    fake.published = dict.fromkeys(fake.published, REVISED)
+    fake.revision = 1.0
+    report = run(fake, store, clean, now=LATER)
+    assert report.invalid
+    assert all("UTC: consumption " in problem for problem in report.invalid)
+    assert table(clean, "consumption").equals(before)
+    noon = paris(2026, 6, 21, 13)
+    assert at(table(clean, "solar"), ("P2 : ]3 - 9] kW",), "mean_w", noon)["value"] == (
+        pytest.approx(2 * (roof(noon, 2.0) + 1))
+    )
 
 
 MAY = Month(CONSUMPTION, paris(2026, 5, 1), paris(2026, 6, 1))
@@ -856,6 +949,26 @@ def test_an_empty_export_is_a_month_not_published() -> None:
         (export(first_null("horodate")), "a row without horodate"),
         (export(first_null("code_region")), "a row without code_region"),
         (export(first_null("profil")), "a row without profil"),
+        (export(first_null("nb_points_soutirage")), "a row without nb_points_soutirage"),
+        (
+            export(first_null("indice_representativite_courbe_ndeg1")),
+            "a row without indice_representativite_courbe_ndeg1",
+        ),
+        # A curve is missing exactly when its index says that the secrecy masks it.
+        (
+            export(first_null("courbe_moyenne_ndeg1_ndeg2_wh")),
+            "a courbe_moyenne_ndeg1_ndeg2_wh missing without "
+            "indice_representativite_courbe_ndeg1_ndeg2 at S",
+        ),
+        (
+            export(may_rows(indice_representativite_courbe_ndeg2="S")),
+            "a courbe_moyenne_ndeg2_wh missing without indice_representativite_courbe_ndeg2 at S, "
+            "or the reverse",
+        ),
+        (
+            export(first_null("total_energie_soutiree_wh")),
+            "a total_energie_soutiree_wh missing where the curves are published",
+        ),
     ],
 )
 def test_a_month_must_keep_its_known_shape(content: bytes, message: str) -> None:
@@ -881,7 +994,7 @@ def test_a_column_ampere_does_not_read_is_left_unread() -> None:
     assert values.height > 0
 
 
-def test_a_longer_response_that_is_faulty_leaves_the_month_to_the_one_before(
+def test_a_response_with_a_row_outside_its_month_leaves_it_to_the_one_before(
     fake: FakeEnedis, store: RawStore, clean: Path
 ) -> None:
     run(fake, store, clean)
@@ -896,8 +1009,8 @@ def test_a_longer_response_that_is_faulty_leaves_the_month_to_the_one_before(
     report = run(fake, store, clean, now=LATER)
     assert report.errors == [f"{may.url}: rows outside the month"]
     assert report.warnings == [
-        "consumption 2026-05: the response received at 2026-08-10 12:00:00 UTC is used, the "
-        "last one being cut short or unreadable"
+        "consumption 2026-05: the last response does not read, the one received at 2026-08-10 "
+        "12:00:00 UTC is used"
     ]
 
 
@@ -927,6 +1040,10 @@ def test_the_metadata_must_give_the_date_of_the_publication(body: bytes, message
     )
 
 
+# The dataset of the rows below, with their segment alone expected.
+RES3 = replace(CONSUMPTION, expected=(("RES3", "P1: ]0-9] kVA"),))
+
+
 def clean_rows(first: date, last: date) -> pl.DataFrame:
     """Whole days of sites and totals for one segment."""
     rows = []
@@ -941,28 +1058,26 @@ def clean_rows(first: date, last: date) -> pl.DataFrame:
 def test_the_checks_count_each_half_hour_of_a_segment_with_the_clock_changes() -> None:
     # The clocks go forward on 29 March 2026: 46 half-hours. A half-hour without its count of
     # sites is missing; one without its total is masked by the statistical secrecy.
-    rows = clean_rows(date(2026, 3, 28), date(2026, 3, 30))
+    rows = clean_rows(date(2026, 3, 28), date(2026, 3, 31))
     moment = paris(2026, 3, 29, 4)
     missing = rows.filter(
         ~((pl.col("start") == moment) & (pl.col("measure") == "sites"))
         & ~((pl.col("start") == moment + HALF) & (pl.col("measure") == "total_w"))
     )
-    report = check(
-        missing, CONSUMPTION, since=date(2026, 3, 28), now=datetime(2026, 4, 2, tzinfo=UTC)
-    )
+    report = check(missing, RES3, since=date(2026, 3, 28), now=datetime(2026, 4, 2, tzinfo=UTC))
     assert report == Report(
         errors=["consumption RES3 P1: ]0-9] kVA 2026-03-29: 1 of 46 half-hours missing"]
     )
 
 
 def test_the_checks_stop_at_the_last_half_hour_published() -> None:
-    rows = clean_rows(date(2026, 10, 24), date(2026, 10, 25))  # 25 October: 50 half-hours
+    rows = clean_rows(date(2026, 10, 24), date(2026, 10, 31))  # 25 October: 50 half-hours
     now = datetime(2026, 12, 1, tzinfo=UTC)
-    assert check(rows, CONSUMPTION, since=date(2026, 10, 24), now=now) == Report()
+    assert check(rows, RES3, since=date(2026, 10, 24), now=now) == Report()
     gap = rows.filter(
         ~((pl.col("start") == paris(2026, 10, 25, 12)) & (pl.col("measure") == "sites"))
     )
-    assert check(gap, CONSUMPTION, since=date(2026, 10, 24), now=now) == Report(
+    assert check(gap, RES3, since=date(2026, 10, 24), now=now) == Report(
         errors=["consumption RES3 P1: ]0-9] kVA 2026-10-25: 1 of 50 half-hours missing"]
     )
 
@@ -971,12 +1086,45 @@ def test_the_checks_stop_at_the_last_half_hour_published() -> None:
 def test_a_publication_late_by_a_month_is_a_warning(days: int, warned: bool) -> None:
     rows = clean_rows(date(2026, 6, 30), date(2026, 6, 30))
     end = paris(2026, 7, 1)
-    report = check(rows, CONSUMPTION, since=date(2026, 6, 30), now=end + timedelta(days=days))
+    report = check(rows, RES3, since=date(2026, 6, 30), now=end + timedelta(days=days))
     expected = (
         "consumption: the last half-hour published ends at 2026-06-30 22:00 UTC, more than 150 "
         "days ago"
     )
-    assert report.warnings == ([expected] if warned else [])
+    assert report == Report(warnings=[expected] if warned else [])
+
+
+@pytest.mark.parametrize(
+    ("end", "warned"),
+    [(paris(2026, 7, 1), False), (paris(2026, 6, 30), True), (paris(2026, 7, 1, 12), True)],
+)
+def test_a_table_that_ends_within_a_month_is_a_warning(end: datetime, warned: bool) -> None:
+    # Enedis publishes whole months: the checks, which stop at the last half-hour published,
+    # would not see the rest of the last one missing.
+    rows = clean_rows(date(2026, 6, 1), date(2026, 7, 1)).filter(pl.col("start") < end)
+    report = check(rows, RES3, since=date(2026, 6, 1), now=NOW)
+    expected = (
+        f"consumption: the last half-hour published ends at {end:%Y-%m-%d %H:%M} UTC, before "
+        "the end of its month"
+    )
+    assert (expected in report.warnings) is warned
+
+
+def test_an_expected_segment_never_published_is_an_error_and_another_a_warning() -> None:
+    rows = clean_rows(date(2026, 6, 1), date(2026, 6, 30))
+    other = replace(CONSUMPTION, expected=(("RES4", "P1: ]0-9] kVA"),))
+    report = check(rows, other, since=date(2026, 6, 1), now=NOW)
+    assert report == Report(
+        errors=["consumption RES4 P1: ]0-9] kVA: nothing published"],
+        warnings=["consumption RES3 P1: ]0-9] kVA: not an expected segment"],
+    )
+
+
+def test_ampere_expects_the_39_segments_of_homes_and_the_2_of_rooftops() -> None:
+    assert len(set(CONSUMPTION.expected)) == 39
+    assert ("RES2WE", "P6: ]15-36] kVA") in CONSUMPTION.expected
+    assert set(HOMES) < set(CONSUMPTION.expected)
+    assert SOLAR.expected == (("P1 : ]0 - 3] kW",), ("P2 : ]3 - 9] kW",))
 
 
 @pytest.mark.parametrize(
