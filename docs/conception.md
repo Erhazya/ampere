@@ -528,7 +528,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 
 | Question | Quand |
 |---|---|
-| Sens exact des profils résidentiels d'Enedis, des courbes n°1 et n°2 et de l'indice de représentativité | Étape 2 |
+| Sens exact des profils résidentiels d'Enedis | Étape 2 |
 | Modèle d'estimation des jours récents : lequel, et comment le valider ? | Étapes 2 et 3 |
 | Méthode et paramètres de la variabilité par foyer | Étape 3 |
 | Valeurs par défaut des équipements (part des toits équipés, tailles des batteries) et leurs sources | Étape 3 |

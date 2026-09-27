@@ -24,7 +24,7 @@ import httpx2
 import polars as pl
 
 from ampere.data.clean import Report, write_parquet
-from ampere.data.days import PARIS, every_day, paris_day, paris_months, quarter_hours
+from ampere.data.days import PARIS, day_bounds, every_day, paris_day, paris_months, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 from ampere.sources.archive import JSON, fetch
 from ampere.sources.shapes import SchemaError, load_json
@@ -38,8 +38,8 @@ PARQUET = "application/vnd.apache.parquet"
 PUBLICATION = "publication"
 # The start of the history, shared by every source.
 SINCE = date(2023, 7, 1)
-# After a new publication, every month is asked again for this long: a run cut short leaves no
-# month at the publication before.
+# After a new publication, every month is asked again for this many Paris days, that of its first
+# reception included: a run cut short leaves no month at the publication before.
 REFRESH = timedelta(days=7)
 # Seconds between two requests, out of politeness.
 PAUSE = 0.5
@@ -58,8 +58,11 @@ HALF_HOUR = timedelta(minutes=30)
 # lacks some of it.
 LAGGING = timedelta(days=60)
 # Over three years, the statistical secrecy masks at most 7.7 % of the global curve of a month
-# for homes, and 1.2 % for rooftop solar: far more is a publication that masks it by mistake.
+# for homes, and 1.2 % for rooftop solar: far more is a publication that masks it by mistake. For
+# homes, 20 % is 4 to 6 of the 39 segments masked for a whole month.
 MASKED_AT_MOST = 0.2
+# Invalid rows listed in a report: the others are only counted.
+INVALID_LISTED = 100
 # The step of a value that stands for a whole day: a count of sites, or a curve that the
 # statistical secrecy only publishes as the mean of its day.
 DAY_MINUTES = 1440
@@ -192,7 +195,7 @@ SOLAR = Dataset(
     name="prod-region",
     kind="solar",
     where="code_region='84' and filiere_de_production='F5 : Solaire' and "
-    f"plage_de_puissance_injection in ('{ROOFTOPS[0]}', '{ROOFTOPS[1]}')",
+    f"plage_de_puissance_injection in ({', '.join(f"'{power}'" for power in ROOFTOPS)})",
     allowed=(
         ("code_region", ("84",)),
         ("filiere_de_production", ("F5 : Solaire",)),
@@ -258,6 +261,8 @@ def ingest(
     kept = len(store.receipts(SOURCE))
     report = Report()
     publications: dict[str, datetime] = {}
+    # The datasets whose every month this run asks for: --full could do no more.
+    refreshed: set[str] = set()
     asked = 0
 
     def ask(dataset: str, request: str, url: str, extension: str) -> tuple[bytes, Receipt]:
@@ -283,7 +288,13 @@ def ingest(
         content, receipt = ask(PUBLICATION, dataset.name, metadata_url(dataset), "json")
         refresh = full
         try:
-            published = publications[dataset.name] = parse_publication(content, receipt.url)
+            published = parse_publication(content, receipt.url)
+            if published > now + timedelta(days=1):
+                raise SchemaError(
+                    f"{receipt.url}: a publication dated {published:%Y-%m-%d %H:%M} UTC, "
+                    "after the run"
+                )
+            publications[dataset.name] = published
         except SchemaError as error:
             # Without the date of the publication, the months are asked for as on an ordinary
             # day.
@@ -292,11 +303,15 @@ def ingest(
             # A publication seen to replace another opens the window at its first reception;
             # the first one ever seen, at its own date.
             opened = first_reception(store, dataset, published) or published
-            if now < opened + REFRESH:
+            # In Paris days: the start of a run and a reception come from two clocks, and the
+            # eighth run would otherwise fall on either side by a fraction of a second.
+            if paris_day(now) - paris_day(opened) < REFRESH:
                 refresh = True
                 log.info("%s: publication of %s, every month asked", dataset.name, published)
         wanted = months(dataset, since, paris_day(now))
-        if not refresh:
+        if refresh:
+            refreshed.add(dataset.name)
+        else:
             wanted = to_ask(store, responses(store), wanted)
         for month in wanted:
             content, receipt = ask(dataset.kind, month.name, month.url, "parquet")
@@ -310,8 +325,11 @@ def ingest(
         frame, built = build(store, history, dataset, since=since, today=paris_day(now))
         report.errors.extend(built.errors)
         report.warnings.extend(built.warnings)
-        report.warnings.extend(late_months(frame, dataset, publications.get(dataset.name)))
-        found = check(frame, dataset, since=since, now=now)
+        asked_all = dataset.name in refreshed
+        report.warnings.extend(
+            late_months(frame, dataset, publications.get(dataset.name), asked_all=asked_all)
+        )
+        found = check(frame, dataset, since=since, now=now, asked_all=asked_all)
         report.invalid.extend(found.invalid)
         report.errors.extend(found.errors)
         report.warnings.extend(found.warnings)
@@ -378,17 +396,19 @@ def to_ask(
     window of their dataset, the months that end with the last one published. The months that
     have left it, and those not published yet, stay empty."""
     counts: list[int | None] = []
-    for month in wanted:
+    # The last month whose last response has rows, or does not read: Enedis may publish it.
+    last: int | None = None
+    for i, month in enumerate(wanted):
         receipts = history.get((month.dataset.kind, month.name), [])
         raw = rows_of(store, receipts[-1], month) if receipts else None
         counts.append(None if raw is None else raw.height)
-    with_rows = [i for i, count in enumerate(counts) if count]
-    size = wanted[0].dataset.window if wanted else 0
-    window = range(with_rows[-1] - size + 1, with_rows[-1]) if with_rows else range(0)
+        if receipts and (raw is None or raw.height):
+            last = i
     return [
         month
         for i, (month, count) in enumerate(zip(wanted, counts, strict=True))
-        if count is None or (count == 0 and i in window)
+        if count is None
+        or (count == 0 and last is not None and last - month.dataset.window < i < last)
     ]
 
 
@@ -424,11 +444,15 @@ def build(
     # The months taken from an older response, judged once the last month published is known.
     older: list[tuple[int, Month, str, Receipt]] = []
     last_published: int | None = None
+    # The end of the window: the last month published, or whose last response does not read.
+    window_end: int | None = None
     for i, month in enumerate(months(dataset, since, today)):
         receipts = history.get((dataset.kind, month.name), [])
         if not receipts:
             continue
         last = rows_of(store, receipts[-1], month)
+        if last is None or last.height:
+            window_end = i
         if last is not None and last.height:
             raw, receipt = last, receipts[-1]
             last_published = i
@@ -451,7 +475,7 @@ def build(
             "ones are used"
         )
     for i, month, why, receipt in older:
-        inside = last_published is not None and i > last_published - dataset.window
+        inside = window_end is not None and i > window_end - dataset.window
         if why == "does not read" or inside:
             report.warnings.append(
                 f"{dataset.kind} {month.name}: the last response {why}, the one received at "
@@ -474,12 +498,6 @@ def parse_publication(content: bytes, url: str) -> datetime:
         except (ValueError, OverflowError):
             pass
     raise SchemaError(f"{url}: no date of publication, dataUpdatedAt {value!r}")
-
-
-def parse_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
-    """The values of a monthly export, in the long form of the clean table but for the reception
-    time; none when Enedis does not publish the month."""
-    return month_values(read_month(content, month, url), month)
 
 
 def footer(content: bytes, url: str) -> tuple[int, pl.Schema]:
@@ -533,7 +551,8 @@ def check_rows(raw: pl.DataFrame, month: Month, url: str) -> None:
             raise SchemaError(f"{url}: a row without {column}")
     if raw.filter(~STARTS.is_between(month.start, month.end, closed="left")).height:
         raise SchemaError(f"{url}: rows outside the month")
-    if raw.filter(STARTS.dt.truncate("30m") != STARTS).height:
+    # On the instants as sent: cut to the microsecond, two could become the same half-hour.
+    if raw.filter(pl.col("horodate").dt.truncate("30m") != pl.col("horodate")).height:
         raise SchemaError(f"{url}: instants off the half-hour")
     for column, values in dataset.allowed:
         if raw.filter(~pl.col(column).is_in(pl.Series(values).implode())).height:
@@ -543,8 +562,9 @@ def check_rows(raw: pl.DataFrame, month: Month, url: str) -> None:
             raise SchemaError(f"{url}: a {column} that does not start with {prefix}")
     if raw.select(*sources, "horodate").is_duplicated().any():
         raise SchemaError(f"{url}: a half-hour twice for a segment")
-    numbers = [dataset.total, *CURVES.values()]
-    if raw.select(pl.any_horizontal(~pl.col(numbers).is_finite()).any()).item():
+    # Finite once doubled into W, as month_values does.
+    doubled = pl.col(dataset.total, *CURVES.values()).cast(pl.Float64) * 2
+    if raw.select(pl.any_horizontal(~doubled.is_finite()).any()).item():
         raise SchemaError(f"{url}: a value that is not a finite number")
     for curve, index in INDICES.items():
         if raw.filter(~pl.col(index).str.contains(r"^(\d+|< 1|S)$")).height:
@@ -567,8 +587,9 @@ def month_values(raw: pl.DataFrame, month: Month) -> pl.DataFrame:
         STARTS.alias("start"),
         *(pl.col(source).alias(clean) for source, clean in dataset.segment),
         pl.col(dataset.sites).cast(pl.Float64).alias("sites"),
-        (pl.col(dataset.total) * 2).alias("total_w"),
-        *((pl.col(field) * 2).alias(name) for name, field in CURVES.items()),
+        # In floats: an integer column would overflow once doubled.
+        (pl.col(dataset.total).cast(pl.Float64) * 2).alias("total_w"),
+        *((pl.col(field).cast(pl.Float64) * 2).alias(name) for name, field in CURVES.items()),
     )
     long = wide.unpivot(
         index=["start", *dataset.keys], variable_name="measure", value_name="value"
@@ -591,7 +612,7 @@ def check_columns(schema: pl.Schema, dataset: Dataset, url: str) -> list[str]:
         dataset.total: lambda dtype: dtype.is_float() or dtype.is_integer(),
         **dict.fromkeys(CURVES.values(), lambda dtype: dtype.is_float() or dtype.is_integer()),
         **dict.fromkeys(
-            {column for column, _ in (*dataset.allowed, *dataset.prefixed, *dataset.segment)},
+            [column for column, _ in (*dataset.allowed, *dataset.prefixed, *dataset.segment)],
             lambda dtype: dtype == pl.String,
         ),
         **dict.fromkeys(INDICES.values(), lambda dtype: dtype == pl.String),
@@ -647,20 +668,28 @@ def with_steps(long: pl.DataFrame, month: Month) -> pl.DataFrame:
     )
 
 
-def late_months(frame: pl.DataFrame, dataset: Dataset, published: datetime | None) -> list[str]:
+def late_months(
+    frame: pl.DataFrame, dataset: Dataset, published: datetime | None, *, asked_all: bool = False
+) -> list[str]:
     """A warning when the clean table ends more than LAGGING before the last publication: a
     publication covers up to about a month before its date, so that months of it are missing,
-    or still those of an earlier one, as after a run cut short. `--full` asks for them again."""
+    or still those of an earlier one, as after a run cut short. `--full` asks for them again,
+    which a run that has just asked for every month cannot do better."""
     last = frame["start"].max()
-    if published is None or not isinstance(last, datetime) or published - last <= LAGGING:
+    if not isinstance(last, datetime) or published is None:
+        return []
+    if published - (last + HALF_HOUR) <= LAGGING:
         return []
     return [
         f"{dataset.kind}: the clean table ends at {last + HALF_HOUR:%Y-%m-%d %H:%M} UTC, more "
-        f"than {LAGGING.days} days before the publication of {published:%Y-%m-%d}: run --full"
+        f"than {LAGGING.days} days before the publication of {published:%Y-%m-%d}"
+        + ("" if asked_all else ": run --full")
     ]
 
 
-def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) -> Report:
+def check(
+    frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime, asked_all: bool = False
+) -> Report:
     """Invalid rows; errors for an expected segment never published, and for each half-hour an
     expected segment lacks, known by its count of sites, from the start of the history to the
     last half-hour published. Warnings when that last half-hour is too old or does not end a
@@ -682,7 +711,7 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
     if (local.month % 3, local.day, local.hour, local.minute) != (1, 1, 0, 0):
         report.warnings.append(
             f"{dataset.kind}: the last half-hour published ends at {end:%Y-%m-%d %H:%M} UTC, "
-            "before the end of its quarter: run --full"
+            "before the end of its quarter" + ("" if asked_all else ": run --full")
         )
     days = list(every_day(since, paris_day(last)))
     # One count of sites per segment and half-hour: a double is a fault of the shape of its month,
@@ -697,14 +726,12 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
         .collect(engine="streaming")
     )
     counts = {(*segment, day): count for *segment, day, count in grouped.rows()}
-    segments = (
-        frame.lazy()
-        .select(dataset.keys)
-        .unique()
-        .collect(engine="streaming")
-        .sort(dataset.keys)
-        .rows()
-    )
+    # Every segment has its counts of sites: check_rows allows none to be missing.
+    segments = grouped.select(dataset.keys).unique().sort(dataset.keys).rows()
+    # The half-hours of each day, up to the last one published on the last day.
+    half_hours = {
+        day: (min(day_bounds(day)[1], end) - day_bounds(day)[0]) // HALF_HOUR for day in days
+    }
     report.warnings.extend(
         f"{dataset.kind} {' '.join(segment)}: not an expected segment"
         for segment in segments
@@ -718,7 +745,7 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
             report.errors.append(f"{dataset.kind} {' '.join(segment)}: nothing published")
             continue
         for day in days:
-            expected = quarter_hours(day) // 2
+            expected = half_hours[day]
             found = counts.get((*segment, day), 0)
             if found < expected:
                 report.errors.append(
@@ -734,18 +761,21 @@ def masked_months(frame: pl.DataFrame, dataset: Dataset) -> list[str]:
     month = pl.col("start").dt.convert_time_zone(PARIS.key).dt.strftime("%Y-%m").alias("month")
     shares = (
         frame.lazy()
-        .group_by(month)
+        .group_by("start")
         .agg(
             (pl.col("measure") == "sites").sum().alias("sites"),
             (pl.col("measure") == "mean_w").sum().alias("curves"),
         )
+        # About 52,000 instants: the month is only written for each of them.
+        .group_by(month)
+        .agg(pl.col("sites", "curves").sum())
         .with_columns((1 - pl.col("curves") / pl.col("sites")).alias("masked"))
         .filter(pl.col("masked") > MASKED_AT_MOST)
         .sort("month")
         .collect(engine="streaming")
     )
     return [
-        f"{dataset.kind} {month}: the statistical secrecy masks {masked:.0%} of the global curve, "
+        f"{dataset.kind} {month}: the statistical secrecy masks {masked:.1%} of the global curve, "
         f"more than {MASKED_AT_MOST:.0%}"
         for month, _, _, masked in shares.rows()
     ]
@@ -765,19 +795,22 @@ def invalid_rows(frame: pl.DataFrame, dataset: Dataset) -> list[str]:
         "the half-hour"
         for *segment, measure, start in off_grid.select(keys).rows()
     )
-    # One lazy pass over the table: only the rows out of bounds are ever copied.
+    # One lazy pass over the table: only the first rows out of bounds are ever copied, since a
+    # faulty publication could make millions of them.
     curve = pl.col("measure").is_in(pl.Series(list(CURVES)).implode())
-    outside = (
-        frame.lazy()
-        .filter((pl.col("value") < 0) | (curve & (pl.col("value") > dataset.highest_mean)))
-        .select(*keys, "value")
-        .sort(keys)
-        .collect()
+    outside = frame.lazy().filter(
+        (pl.col("value") < 0) | (curve & (pl.col("value") > dataset.highest_mean))
     )
-    for *segment, measure, start, value in outside.rows():
+    count = outside.select(pl.len()).collect(engine="streaming").item()
+    listed = outside.select(*keys, "value").sort(keys).head(INVALID_LISTED).collect()
+    for *segment, measure, start, value in listed.rows():
         limits = f"outside 0 to {dataset.highest_mean:g}" if measure in CURVES else "below 0"
         invalid.append(
             f"{start:%Y-%m-%d %H:%M} UTC: {dataset.kind} {' '.join(segment)} {measure} "
-            f"{value:g}, {limits}"
+            f"{value:.10g}, {limits}"
+        )
+    if count > listed.height:
+        invalid.append(
+            f"{dataset.kind}: {count - listed.height} more values outside their limits, not listed"
         )
     return invalid

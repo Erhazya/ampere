@@ -67,7 +67,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 ### Conventions du projet
 
 - **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request. La copie de travail du VPS a `core.fileMode` à `false` : Git n'y voit pas le bit d'exécution, et un script se rend exécutable avec `git update-index --chmod=+x <fichier>`.
-- **Temps** : dates stockées en UTC, pas de 15 min, heure de Paris seulement à l'affichage.
+- **Temps** : dates stockées en UTC, pas de 15 min, heure de Paris seulement à l'affichage. La météo et les courbes d'Enedis gardent dans le nettoyé leur pas publié (ADR 025 et 026).
 - **Période de test** (1er juillet 2025 au 30 juin 2026) : jamais utilisée hors de l'évaluation finale (ADR 007).
 - **Données** : les données brutes sont conservées telles que reçues, avec leur date de réception, dans la couche brute de `AMPERE_DATA` (par défaut `data/`) ; aucun trou n'est comblé en silence (ADR 022).
 - **Secrets** : aucun dans le dépôt ; en v1, aucune source ne demande de clé.
@@ -100,4 +100,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Choix de l'auteur, le 27 septembre 2026 : juste après l'incrément 2.7 (le traitement quotidien en ligne), un premier écran « Data » sur la démo montre les derniers jours de prix, d'intensité CO₂, de solaire régional et de météo, mis à jour chaque jour. Il a sa maquette Figma et son ADR ; le notebook d'exploration (2.8) vient ensuite.
 - Incrément 2.5, Enedis de bout en bout (ADR 026) : la consommation des 39 segments résidentiels de la région et le solaire des toits, à la demi-heure depuis le 1er juillet 2023, soit 10,4 millions de valeurs. Le premier passage fait 80 requêtes en 7 minutes, un passage ordinaire 2. Le portail d'Enedis a changé de plateforme : les exports passent par la couche de compatibilité de l'ancienne API, les métadonnées par l'API native. Le secret statistique ne laisse une vraie courbe à la demi-heure qu'à 20 segments sur 39.
 - Avant la publication d'Enedis de fin octobre 2026, qui fera sortir juillet à septembre 2023 de sa fenêtre, le brut du serveur (incrément 2.7) doit partir de celui du développement (ADR 026).
+- Suites de la revue de la PR n° 22, pour une PR à part : une seule constante pour le début de l'historique et une seule pause entre requêtes, partagées par les sources ; `responses()` et la lecture d'un instant ISO dans le code commun ; un seul repli sur la dernière réponse lisible pour Open-Meteo et Enedis ; `instants_per_day` en flux, pour qu'Enedis s'en serve ; une règle commune quand un nettoyé serait remplacé par une table vide (ADR 022) ; la publication d'Enedis dans la clé de ses mois, qui remplacerait les 7 jours de redemande, ou au moins ces 7 jours bornés à la fenêtre publiée.
 - Prochaine action : l'incrément 2.6, les calendriers.
