@@ -42,6 +42,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Vente du surplus** : mode de raccordement où la maison consomme d'abord sa production solaire et ne vend que le reste. Son injection sur le réseau est donc sa production moins sa consommation.
 
+**Zones de vacances scolaires** : la métropole est partagée en trois zones, A, B et C, dont les vacances d'hiver et de printemps sont décalées d'une ou deux semaines, pour étaler les départs. Lyon est en zone A, avec sept autres académies qui ont les mêmes vacances (ADR 027).
+
 ## Prévision et évaluation
 
 **Couverture d'un intervalle** : un intervalle de prévision à 80 % doit contenir la valeur réelle 80 % du temps. La couverture mesurée indique si l'incertitude annoncée est honnête.
@@ -96,7 +98,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
-**Couches de données** : les trois états d'une donnée dans le projet. Le brut garde chaque réponse d'une source telle que reçue ; le nettoyé la met en UTC, au pas de 15 min (la météo et les courbes d'Enedis restent au pas publié) et dans des unités communes ; les résultats viennent des simulations et des prévisions. Seul le brut ne se reconstruit pas : il est la seule copie de ce que les sources ont envoyé (ADR 022).
+**Couches de données** : les trois états d'une donnée dans le projet. Le brut garde chaque réponse d'une source telle que reçue ; le nettoyé la met en UTC, au pas de 15 min (la météo et les courbes d'Enedis restent au pas publié, et les calendriers ont une ligne par jour de Paris) et dans des unités communes ; les résultats viennent des simulations et des prévisions. Seul le brut ne se reconstruit pas : il est la seule copie de ce que les sources ont envoyé (ADR 022).
 
 **CSP** (*Content Security Policy*) : en-tête HTTP qui dit au navigateur d'où une page peut charger ses scripts, ses styles, ses polices et ses images. En ligne, le tableau de bord n'a droit qu'aux fichiers de son propre site : un script venu d'ailleurs ne s'exécuterait pas (ADR 021).
 
@@ -178,4 +180,4 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Table longue** : une table qui a une ligne par mesure et par instant, avec une colonne qui nomme la mesure, plutôt qu'une colonne par mesure. Chaque ligne porte ainsi son propre pas de temps et sa propre version, et une mesure de plus ne change pas le schéma. Les nettoyés d'éCO2mix, d'Open-Meteo et d'Enedis sont rangés ainsi (ADR 024 à 026).
 
-**UTC** : temps universel, sans changement d'heure. Le projet stocke toutes les dates en UTC et ne les convertit en heure de Paris qu'à l'affichage. Il évite ainsi les pièges des journées de 23 et de 25 heures.
+**UTC** : temps universel, sans changement d'heure. Le projet stocke tous les instants en UTC et ne les convertit en heure de Paris qu'à l'affichage ; seuls les calendriers, qui décrivent des journées de Paris, ont une colonne de dates de Paris (ADR 027). Il évite ainsi les pièges des journées de 23 et de 25 heures.

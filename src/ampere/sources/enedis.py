@@ -11,7 +11,6 @@ clean/enedis/consumption.parquet and clean/enedis/solar.parquet from the last re
 with rows of each month, and checks them.
 """
 
-import io
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -27,7 +26,7 @@ from ampere.data.clean import Report, write_parquet
 from ampere.data.days import PARIS, day_bounds, every_day, paris_day, paris_months, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 from ampere.sources.archive import JSON, fetch
-from ampere.sources.shapes import SchemaError, load_json
+from ampere.sources.shapes import SchemaError, load_json, read_parquet
 
 log = logging.getLogger(__name__)
 
@@ -500,31 +499,17 @@ def parse_publication(content: bytes, url: str) -> datetime:
     raise SchemaError(f"{url}: no date of publication, dataUpdatedAt {value!r}")
 
 
-def footer(content: bytes, url: str) -> tuple[int, pl.Schema]:
-    """The number of rows and the columns of a Parquet export, read from its footer alone."""
-    try:
-        scan = pl.scan_parquet(io.BytesIO(content))
-        return scan.select(pl.len()).collect().item(), scan.collect_schema()
-    # Polars may even panic on a damaged file, and its panic is a BaseException: caught here, it
-    # makes the response faulty instead of stopping every run that reads it again.
-    except (pl.exceptions.PolarsError, pl.exceptions.PanicException, OSError) as error:
-        raise SchemaError(f"{url}: not a Parquet export ({error})") from error
-
-
 def read_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
     """The rows of a monthly export, as Enedis sends them, after a check of their shape: first
     their number and their columns, from the footer, then the columns Ampère reads."""
-    dataset = month.dataset
-    rows, schema = footer(content, url)
-    if rows > MAX_ROWS or len(schema) > MAX_COLUMNS:
-        raise SchemaError(
-            f"{url}: {rows} rows in {len(schema)} columns, more than a month of Enedis holds"
-        )
-    columns = check_columns(schema, dataset, url)
-    try:
-        raw = pl.read_parquet(io.BytesIO(content), columns=columns)
-    except (pl.exceptions.PolarsError, pl.exceptions.PanicException, OSError) as error:
-        raise SchemaError(f"{url}: not a Parquet export ({error})") from error
+    raw = read_parquet(
+        content,
+        url,
+        month_columns(month.dataset),
+        max_rows=MAX_ROWS,
+        max_columns=MAX_COLUMNS,
+        holds="a month of Enedis holds",
+    )
     try:
         check_rows(raw, month, url)
     except (pl.exceptions.PolarsError, pl.exceptions.PanicException) as error:
@@ -604,9 +589,9 @@ def month_values(raw: pl.DataFrame, month: Month) -> pl.DataFrame:
     )
 
 
-def check_columns(schema: pl.Schema, dataset: Dataset, url: str) -> list[str]:
-    """The columns a monthly export must have, with their types: those Ampère reads."""
-    wanted: dict[str, Callable[[pl.DataType], bool]] = {
+def month_columns(dataset: Dataset) -> dict[str, Callable[[pl.DataType], bool]]:
+    """The columns a monthly export must have, those Ampère reads, with the test of their type."""
+    return {
         "horodate": lambda dtype: isinstance(dtype, pl.Datetime) and dtype.time_zone is None,
         dataset.sites: lambda dtype: dtype.is_integer(),
         dataset.total: lambda dtype: dtype.is_float() or dtype.is_integer(),
@@ -617,11 +602,6 @@ def check_columns(schema: pl.Schema, dataset: Dataset, url: str) -> list[str]:
         ),
         **dict.fromkeys(INDICES.values(), lambda dtype: dtype == pl.String),
     }
-    for column, fits in wanted.items():
-        dtype = schema.get(column)
-        if dtype is None or not fits(dtype):
-            raise SchemaError(f"{url}: no column {column} of the expected type, but {dtype}")
-    return list(wanted)
 
 
 def with_steps(long: pl.DataFrame, month: Month) -> pl.DataFrame:

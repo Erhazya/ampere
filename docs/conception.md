@@ -303,10 +303,11 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 - **Pourquoi pas ENTSO-E directement** : les prix spot ne figurent pas dans la [liste des données librement réutilisables](https://transparencyplatform.zendesk.com/hc/en-us/articles/40921911218961-Legal-Terms-and-Conditions) d'ENTSO-E. Selon ses conditions d'utilisation, les republier demanderait l'accord de leur producteur, la bourse EPEX SPOT.
 - **Recoupement possible** : [Ember](https://ember-energy.org/data/european-wholesale-electricity-price-data/) publie aussi ces prix, au pas horaire et sous CC BY 4.0, mis à jour chaque mois. On pourra s'en servir pour contrôler la cohérence de l'historique.
 
-#### Calendriers officiels
+#### Calendriers officiels *(ADR 027)*
 
-- **Jours fériés** : [API d'Etalab](https://www.data.gouv.fr/dataservices/jours-feries), Licence Ouverte.
-- **Vacances scolaires** : [calendrier de l'Éducation nationale](https://www.data.gouv.fr/datasets/le-calendrier-scolaire), Licence Ouverte 2.0. Lyon est en zone A.
+- **Jours fériés** : [API d'Etalab](https://www.data.gouv.fr/dataservices/jours-feries), Licence Ouverte : les jours fériés de métropole de 2006 à 2031, en un fichier JSON de 8 Ko.
+- **Vacances scolaires** : [calendrier de l'Éducation nationale](https://www.data.gouv.fr/datasets/le-calendrier-scolaire), Licence Ouverte 2.0, exporté en Parquet depuis data.education.gouv.fr. Lyon est en zone A, dont les huit académies ont les mêmes vacances.
+- **Pièges** : une période va de son premier jour sans cours au jour de la reprise, exclu, sauf une période d'un seul jour, dont le début et la fin sont égaux ; l'été a une ligne pour les élèves et une pour les enseignants, qui reprennent un jour plus tôt.
 - **Usage** : variables de la prévision, car un jour férié ou une période de vacances change la consommation.
 
 #### Textes officiels pour la facture
@@ -437,7 +438,7 @@ Le traitement est idempotent : le relancer ne change rien. L'option `Persistent`
 
 - **Trois couches** :
   - **brut**, tel que reçu, jamais modifié, avec la date de réception ;
-  - **nettoyé**, validé, en UTC, au pas de 15 min, avec des unités harmonisées ; la météo reste au pas horaire et les courbes d'Enedis à la demi-heure, comme publiées (ADR 025 et 026) ;
+  - **nettoyé**, validé, en UTC, au pas de 15 min, avec des unités harmonisées ; la météo reste au pas horaire et les courbes d'Enedis à la demi-heure, comme publiées, et les calendriers ont une ligne par jour de Paris (ADR 025, 026 et 027) ;
   - **résultats** : simulations, prévisions, indicateurs.
 - **Stockage** : fichiers Parquet, interrogés en SQL avec DuckDB (par l'API, et plus tard par l'assistant).
 - **Volume** : environ 200 maisons × 96 pas × 365 jours × 3 ans, soit une vingtaine de millions de lignes par grandeur simulée. On attend de l'ordre du gigaoctet ; la mesure réelle sera faite à l'étape 3.
@@ -516,6 +517,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [024](decisions/024-ingestion-d-eco2mix.md) | Ingestion d'éCO2mix, de RTE | Acceptée |
 | [025](decisions/025-ingestion-de-la-meteo.md) | Ingestion de la météo d'Open-Meteo | Acceptée |
 | [026](decisions/026-ingestion-d-enedis.md) | Ingestion des courbes d'Enedis | Acceptée |
+| [027](decisions/027-ingestion-des-calendriers.md) | Ingestion des calendriers | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
