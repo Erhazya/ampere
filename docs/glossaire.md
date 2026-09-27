@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 26 septembre 2026 (étape 1, ADR 021).
+> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 022).
 
 ## Énergie et marché de l'électricité
 
@@ -70,6 +70,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **ADR (Architecture Decision Record)** : court document qui garde la trace d'une décision : le contexte, les options envisagées, la décision et ses conséquences. Le projet en rédige un par décision importante, dans `docs/decisions/`.
 
+**Apache Arrow** : format de tableau en mémoire, rangé par colonnes, que partagent Polars, DuckDB et pandas. Un tableau passe ainsi de Polars à DuckDB sans être recopié, et vers pandas en une seule copie (ADR 022).
+
 **Attestation de provenance** : document signé qui dit où, quand et à partir de quel code une image a été construite. L'image d'Ampère n'en a pas encore (ADR 020).
 
 **BuildKit** : le moteur actuel de `docker build`, celui de la CI. Le Docker rootless du VPS, sans l'extension buildx, utilise encore l'ancien constructeur, qui ne lit que le `.dockerignore` placé à la racine du contexte (ADR 020).
@@ -90,6 +92,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
+**Couches de données** : les trois états d'une donnée dans le projet. Le brut garde chaque réponse d'une source telle que reçue ; le nettoyé la met en UTC, au pas de 15 min et dans des unités communes ; les résultats viennent des simulations et des prévisions. Seul le brut ne se reconstruit pas : il est la seule copie de ce que les sources ont envoyé (ADR 022).
+
 **CSP** (*Content Security Policy*) : en-tête HTTP qui dit au navigateur d'où une page peut charger ses scripts, ses styles, ses polices et ses images. En ligne, le tableau de bord n'a droit qu'aux fichiers de son propre site : un script venu d'ailleurs ne s'exécuterait pas (ADR 021).
 
 **CSS Modules** : fichiers CSS rattachés à un composant, dont l'outil de construction rend les noms de classes uniques. Deux composants peuvent ainsi avoir chacun une classe `.card` sans se gêner (ADR 017).
@@ -107,6 +111,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception.
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
+
+**Écriture atomique** : écrire un fichier sous un nom temporaire, puis lui donner son nom définitif en une seule opération. Un arrêt pendant l'écriture ne laisse jamais de fichier à moitié écrit sous le vrai nom. Contre une coupure de courant, il faut en plus forcer l'écriture sur le disque (`fsync`) avant le renommage : sinon, le système peut enregistrer le nouveau nom avant les données (ADR 022).
 
 **Empreinte** (SHA) : identifiant calculé à partir du contenu exact d'un objet, comme le commit d'une action GitHub ou une image Docker. Désigner l'action ou l'image par son empreinte plutôt que par une étiquette comme `v7` ou `3.13-slim`, que son auteur peut déplacer, garantit que ce qui tourne ne change pas sans une mise à jour visible, proposée par Dependabot. Les outils qu'une action télécharge ont leur propre version : la CI fixe celle de uv et vérifie sa somme SHA-256 (ADR 019 et 020).
 
@@ -132,6 +138,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **LTTB (*Largest-Triangle-Three-Buckets*)** : méthode de sous-échantillonnage qui réduit une longue série à quelques centaines de points en gardant sa forme visuelle, pics et creux compris. Elle rend les graphiques rapides sans les déformer.
 
+**Manifeste** : le registre d'une source dans la couche brute, `manifest.jsonl`. Il compte une ligne par fichier reçu : ce qui a été demandé, d'où vient la réponse, où le fichier est rangé, quand il est arrivé, et son empreinte SHA-256 (ADR 022).
+
 **Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute (ADR 021).
 
 **Origine** : ce qui identifie le site d'une page pour le navigateur : le protocole, le nom et le port, par exemple `https://ampere.exemple:443`. Par sécurité, une page ne peut lire que les réponses de sa propre origine, sauf autorisation CORS.
@@ -141,6 +149,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Parquet** : format de fichier standard de la data, compressé et rangé par colonnes. Lire une seule colonne ne demande pas de lire tout le fichier.
 
 **Point de santé (`/healthz`)** : route qui répond tant que le processus tourne. La plateforme du portfolio l'interroge pour savoir si une démo est en vie. Le tableau de bord interroge la même fonction sous `/api/healthz` pour afficher l'état de l'API, et le contrôle de santé de l'image Docker l'interroge en GET toutes les 30 secondes (ADR 020).
+
+**Polars** : bibliothèque de tableaux de données écrite en Rust, rapide et stricte sur les types, notamment les dates avec leur fuseau et les valeurs manquantes. Le projet l'utilise pour ses données, et ne passe à pandas que pour les bibliothèques qui l'exigent, comme pvlib (ADR 022).
 
 **Réanalyse** : reconstitution de la météo passée par un modèle qui intègre toutes les observations disponibles (stations, satellites, ballons). C'est la « météo observée » la plus complète et la plus homogène ; ERA5 en est l'exemple le plus connu.
 

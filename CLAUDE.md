@@ -64,7 +64,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - **Git** : Conventional Commits ; une branche par fonctionnalité, fusionnée par pull request. La copie de travail du VPS a `core.fileMode` à `false` : Git n'y voit pas le bit d'exécution, et un script se rend exécutable avec `git update-index --chmod=+x <fichier>`.
 - **Temps** : dates stockées en UTC, pas de 15 min, heure de Paris seulement à l'affichage.
 - **Période de test** (1er juillet 2025 au 30 juin 2026) : jamais utilisée hors de l'évaluation finale (ADR 007).
-- **Données** : les données brutes sont conservées telles que reçues, avec leur date de réception ; aucun trou n'est comblé en silence.
+- **Données** : les données brutes sont conservées telles que reçues, avec leur date de réception, dans la couche brute de `AMPERE_DATA` (par défaut `data/`) ; aucun trou n'est comblé en silence (ADR 022).
 - **Secrets** : aucun dans le dépôt ; en v1, aucune source ne demande de clé.
 - **Sources à citer** dans l'interface et le README : « RTE, éCO2mix », « Enedis, open data », « Weather data by Open-Meteo.com », « PVGIS, Commission européenne (JRC) », « Bundesnetzagentur | SMARD.de ».
 - **Documentation** : `docs/conception.md`, `docs/decisions/` (ADR), `docs/mesures.md`, `docs/retour-experience.md` et `docs/glossaire.md`, à compléter à chaque notion nouvelle.
@@ -86,4 +86,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Incrément 7 : démo en ligne depuis le 26 septembre 2026 sur https://ampere.146-19-168-222.sslip.io, déployée par la plateforme du socle ; paquet GHCR public (ADR 021).
 - Déploiement automatique et retour arrière essayés le 26 septembre 2026 (mesure 8 du socle) ; la mesure définitive suit la fusion suivante.
 - Incrément 6 terminé le 27 septembre 2026 : dépôt public, `main` protégée, analyse des secrets de GitHub, alertes et correctifs Dependabot, actions limitées à une liste et désignées par leur empreinte, workflows des comptes extérieurs soumis à approbation.
-- Prochaine action : l'étape 2, les données.
+- Étape 2 (données) commencée le 27 septembre 2026. Incrément 2.1, les fondations des données (ADR 022) : les journées de Paris bornées en UTC, la couche brute (durable, verrouillée, vérifiable, créée une fois avec `RawStore.create`) avec son manifeste, et l'accès HTTP aux sources, qui ne laisse passer que des réponses attendues.
+- Prochaine action : l'incrément 2.2, les prix de SMARD de bout en bout (brut, nettoyé, contrôles, rattrapage).

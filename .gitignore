@@ -15,8 +15,10 @@ __pycache__/
 node_modules/
 web/dist/
 
-# Data and results: always regenerated from the sources, never committed
-data/
+# Data, never committed: the raw layer is the only copy of what the sources sent, kept by
+# the platform's backups; the rest is rebuilt from it (ADR 022). Anchored at the root, so
+# that the src/ampere/data package is not ignored.
+/data/
 
 # Secrets: only .env.example is committed
 .env

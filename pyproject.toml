@@ -11,6 +11,8 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",
+    "httpx2>=2.13.1",
+    "polars>=1.44.2",
     "uvicorn>=0.53.0",
 ]
 
@@ -40,7 +42,6 @@ addopts = "-ra --strict-markers"
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.13.1",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.8",
