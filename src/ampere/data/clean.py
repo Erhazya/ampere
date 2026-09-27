@@ -40,12 +40,15 @@ def write_parquet(frame: pl.DataFrame, path: Path) -> None:
     write_atomically(path, buffer.getvalue())
 
 
-def quarter_hours_per_day(frame: pl.DataFrame, by: Sequence[str] = ()) -> pl.DataFrame:
-    """How many distinct quarter-hours of the grid each Paris day has, for each group of `by`.
+def instants_per_day(
+    frame: pl.DataFrame, by: Sequence[str] = (), *, column: str = "start", every: str = "15m"
+) -> pl.DataFrame:
+    """How many distinct instants of a grid each Paris day has in a column, for each group of
+    `by`: by default, the quarter-hours of `start`.
 
     The result has the columns of `by`, then `day` and `len`. An instant off the grid is not
-    counted: it would hide a missing quarter-hour.
+    counted: it would hide a missing one.
     """
-    on_grid = frame.filter(pl.col("start").dt.truncate("15m") == pl.col("start"))
-    day = pl.col("start").dt.convert_time_zone(PARIS.key).dt.date().alias("day")
-    return on_grid.select(*by, "start").unique().group_by(*by, day).len()
+    on_grid = frame.filter(pl.col(column).dt.truncate(every) == pl.col(column))
+    day = pl.col(column).dt.convert_time_zone(PARIS.key).dt.date().alias("day")
+    return on_grid.select(*by, column).unique().group_by(*by, day).len()

@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 import httpx2
 import polars as pl
 
-from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
+from ampere.data.clean import Report, instants_per_day, write_parquet
 from ampere.data.days import (
     PARIS,
     QUARTER_HOUR,
@@ -532,7 +532,7 @@ def check(measures: pl.DataFrame, store: RawStore, *, since: date, now: datetime
     )
     counts = {
         (area, name, day): count
-        for area, name, day, count in quarter_hours_per_day(
+        for area, name, day, count in instants_per_day(
             measures.filter(~passes), by=["area", "measure"]
         ).rows()
     }

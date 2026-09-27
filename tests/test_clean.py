@@ -7,7 +7,7 @@ from typing import Any
 import polars as pl
 import pytest
 
-from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
+from ampere.data.clean import Report, instants_per_day, write_parquet
 from ampere.data.days import day_bounds
 
 
@@ -50,8 +50,17 @@ def test_quarter_hours_are_counted_per_paris_day_and_per_group() -> None:
     # In ARA, a quarter-hour twice and an instant off the grid: one quarter-hour only.
     extra = [quarters[0], quarters[0], quarters[1] + timedelta(minutes=7)]
     frame = pl.DataFrame({"area": ["FR"] * 100 + ["ARA"] * 3, "start": quarters + extra})
-    counts = quarter_hours_per_day(frame, by=["area"])
+    counts = instants_per_day(frame, by=["area"])
     assert sorted(counts.rows()) == [
         ("ARA", date(2025, 10, 26), 1),
         ("FR", date(2025, 10, 26), 100),
     ]
+
+
+def test_hours_are_counted_in_any_column() -> None:
+    start = day_bounds(date(2026, 3, 29))[0]  # the clocks go forward: 23 hours
+    hours = [start + i * timedelta(hours=1) for i in range(23)]
+    # An instant a quarter past the hour is off this grid: it is not counted.
+    frame = pl.DataFrame({"time": [*hours, hours[5] + timedelta(minutes=15)]})
+    counts = instants_per_day(frame, column="time", every="1h")
+    assert counts.rows() == [(date(2026, 3, 29), 23)]
