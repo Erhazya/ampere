@@ -86,25 +86,31 @@ class Manifest:
         self.last[receipt.dataset, receipt.request] = receipt
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 class RawStore:
     """The raw folder of the data directory."""
 
-    def __init__(self, root: Path) -> None:
-        """Open an existing raw layer."""
+    def __init__(self, root: Path, clock: Callable[[], datetime] = utc_now) -> None:
+        """Open an existing raw layer. Its clock gives the reception time of a response: now,
+        unless a test plays a run at another date."""
         if not (root / MARKER).is_file():
             raise FileNotFoundError(
                 f"{root.absolute()} is not a raw layer, it has no {MARKER} file: check AMPERE_DATA "
                 "and its volume, or, for a first use, create the layer once with `ampere data init`"
             )
         self.root = root
+        self.clock = clock
         self.manifests: dict[str, Manifest] = {}
 
     @classmethod
-    def create(cls, root: Path) -> "RawStore":
+    def create(cls, root: Path, clock: Callable[[], datetime] = utc_now) -> "RawStore":
         """Create a raw layer, or open it if it exists: a deployment step, never a daily one."""
         if not (root / MARKER).exists():
             write_atomically(root / MARKER, b"1\n")
-        return cls(root)
+        return cls(root, clock)
 
     def save(
         self,
@@ -122,12 +128,13 @@ class RawStore:
         """Keep a response, unless it is the same as the last one received for this request.
 
         The same means identical or, given a fingerprint, with the same fingerprint: the file kept
-        then stays the first one received. The reception time is now when not given. A file lost
-        or damaged since it was kept is written again from an identical response.
+        then stays the first one received. The reception time comes from the clock when not
+        given. A file lost or damaged since it was kept is written again from an identical
+        response.
         """
         for name in (source, dataset, extension):
             check_name(name)
-        received_at = reception_time(received_at)
+        received_at = reception_time(self.clock() if received_at is None else received_at)
         sha256 = hashlib.sha256(content).hexdigest()
         with self.locked(source):
             # An empty manifest first, for a new source: after a crash that stops the very first
@@ -294,11 +301,9 @@ def check_name(name: str) -> None:
         raise ValueError(f"invalid name for the raw layer: {name!r}")
 
 
-def reception_time(received_at: datetime | None) -> datetime:
+def reception_time(received_at: datetime) -> datetime:
     """UTC, to the second: the precision of the file names and of the manifest."""
-    if received_at is None:
-        received_at = datetime.now(UTC)
-    elif received_at.utcoffset() is None:
+    if received_at.utcoffset() is None:
         raise ValueError("the reception time needs a time zone")
     return received_at.astimezone(UTC).replace(microsecond=0)
 

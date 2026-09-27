@@ -229,6 +229,19 @@ def test_the_reception_time_defaults_to_now(store: RawStore) -> None:
     assert before <= receipt.received_at <= datetime.now(UTC)
 
 
+def test_the_reception_time_comes_from_the_clock_of_the_layer(tmp_path: Path) -> None:
+    # A test that plays a run at another date gives its own clock.
+    moment = datetime(2026, 6, 20, 15, 0, 5, 700_000, tzinfo=ZoneInfo("Europe/Paris"))
+    store = RawStore.create(tmp_path / "raw", clock=lambda: moment)
+    assert save(store, b"x", received_at=None).receipt.received_at == datetime(
+        2026, 6, 20, 13, 0, 5, tzinfo=UTC
+    )
+    later = RawStore(store.root, clock=lambda: moment + timedelta(hours=1))
+    assert save(later, b"y", received_at=None).receipt.received_at == datetime(
+        2026, 6, 20, 14, 0, 5, tzinfo=UTC
+    )
+
+
 def test_a_reception_time_without_a_time_zone_is_refused(store: RawStore) -> None:
     with pytest.raises(ValueError, match="time zone"):
         save(store, b"x", received_at=datetime(2026, 9, 27, 12, 30))
