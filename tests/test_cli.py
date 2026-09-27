@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 import ampere
 from ampere import cli
 from ampere.data.clean import Report
-from ampere.sources import eco2mix, smard
+from ampere.sources import eco2mix, openmeteo, smard
 from ampere.sources.shapes import SchemaError
 
 
@@ -216,6 +216,22 @@ def test_ingest_eco2mix_runs_its_own_source(
     assert date(2023, 7, 1) == eco2mix.SINCE
     assert ("ampere", logging.WARNING, "real time: no consumption") in caplog.record_tuples
     assert "eco2mix: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
+
+
+def test_ingest_openmeteo_runs_its_own_source(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ampere")
+    prices = fake_ingest(monkeypatch, Report())
+    weather = fake_ingest(monkeypatch, Report(errors=["run 2026-06-12T00:00: missing"]), openmeteo)
+    assert cli.main(["ingest", "openmeteo"]) == 1
+    assert prices == []
+    assert weather[0]["clean"] == data / "clean" and weather[0]["full"] is False
+    # The history and the first run are those of ADR 025, and no option changes them.
+    assert "since" not in weather[0] and "first_run" not in weather[0]
+    assert (date(2023, 7, 1), date(2024, 3, 14)) == (openmeteo.SINCE, openmeteo.FIRST_RUN)
+    assert ("ampere", logging.ERROR, "run 2026-06-12T00:00: missing") in caplog.record_tuples
+    assert "openmeteo: 0 invalid rows, 1 errors, 0 warnings" in caplog.text
 
 
 def test_ingest_has_no_option_to_shorten_the_history() -> None:

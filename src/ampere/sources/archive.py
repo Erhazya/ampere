@@ -22,18 +22,25 @@ def fetch_json(
     url: str,
     max_bytes: int,
     sleep: Callable[[float], None],
+    request: str | None = None,
+    fingerprint: Callable[[bytes], bytes] | None = None,
 ) -> tuple[bytes, Receipt]:
     """GET a JSON response, keep it in the raw layer, and return its body with the receipt
-    that records it."""
+    that records it.
+
+    The raw layer files it under its request, the URL unless another name is given, and compares
+    it with the last response of that request, byte for byte or by its fingerprint.
+    """
     fetched = get(http, url, content_type=JSON, max_bytes=max_bytes, sleep=sleep)
     saved = store.save(
         source=source,
         dataset=dataset,
-        request=url,
+        request=url if request is None else request,
         url=fetched.url,
         content_type=fetched.content_type,
         content=fetched.content,
         extension="json",
+        fingerprint=fingerprint,
     )
     if saved.new:
         log.info("%s: new response kept in %s", url, saved.receipt.path)
