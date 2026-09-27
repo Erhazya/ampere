@@ -53,6 +53,8 @@ PAUSE = 0.5
 MAX_BYTES = 1_000_000
 # A run comes about 6 h 30 after its launch: from this hour UTC, the run of the day is late.
 LATE_FROM = 12
+# What Open-Meteo says, with a 400, of a run it does not have, or not yet.
+NOT_AVAILABLE = "The requested model run is not available"
 
 
 @dataclass(frozen=True)
@@ -214,10 +216,15 @@ def ingest(
                 fingerprint=fingerprint,
             )
         except httpx2.HTTPStatusError as error:
-            # Open-Meteo answers 400 for a run it does not have, or not yet.
-            if request.run is None or error.response.status_code != 400:
+            # Only a missing run lets the run go on: any other refusal stops it, as elsewhere.
+            reason = " ".join(getattr(error, "__notes__", []))
+            if (
+                request.run is None
+                or error.response.status_code != 400
+                or NOT_AVAILABLE not in reason
+            ):
                 raise
-            log.info("%s: no run %s at Open-Meteo (HTTP 400)", SOURCE, request.name)
+            log.info("%s: no run %s at Open-Meteo, HTTP 400 (%s)", SOURCE, request.name, reason)
             return None
 
     for request in [*months(day_bounds(since)[0].date(), today), *runs(first_run, today)]:
@@ -227,7 +234,7 @@ def ingest(
             if fetched is not None:
                 content, receipt = fetched
                 try:
-                    held = Held(parse(content, request, receipt.url), receipt.received_at)
+                    held = hold(content, request, receipt)
                 except SchemaError as error:
                     # A faulty response is an error; the run goes on with the last readable one.
                     errors.append(str(error))
@@ -284,14 +291,25 @@ def readable(store: RawStore, receipts: list[Receipt], request: Request) -> Held
     one, damaged or of an unknown shape, is logged."""
     for receipt in reversed(receipts):
         try:
-            values = parse(store.read(receipt), request, receipt.url)
+            return hold(store.read(receipt), request, receipt, last=receipt == receipts[-1])
         except (DamagedRawFile, SchemaError) as error:
             log.warning(
                 "%s %s: a kept response is unusable (%s)", request.kind, request.name, error
             )
-            continue
-        return Held(values, receipt.received_at, last=receipt is receipts[-1])
     return None
+
+
+def hold(content: bytes, request: Request, receipt: Receipt, last: bool = True) -> Held:
+    """A response read for its request, with its values as they stood at its reception. An
+    observed value later than that is left out: the archive fills the rest of the day with the
+    forecast, and a month missing those hours is not whole."""
+    values = parse(content, request, receipt.url)
+    if request.run is None:
+        values = {
+            name: [(moment, value) for moment, value in series if moment <= receipt.received_at]
+            for name, series in values.items()
+        }
+    return Held(values, receipt.received_at, last)
 
 
 def settled(held: Held, request: Request, now: datetime) -> bool:
@@ -323,11 +341,12 @@ def parse(content: bytes, request: Request, url: str) -> Values:
     if not isinstance(body, dict):
         raise SchemaError(f"{url}: not an object")
     latitude, longitude = body.get("latitude"), body.get("longitude")
-    if not (
-        is_number(latitude)
-        and is_number(longitude)
-        and abs(latitude - LATITUDE) <= NEAR
-        and abs(longitude - LONGITUDE) <= NEAR
+    north, east = finite(latitude), finite(longitude)
+    if (
+        north is None
+        or east is None
+        or abs(north - LATITUDE) > NEAR
+        or abs(east - LONGITUDE) > NEAR
     ):
         raise SchemaError(f"{url}: a grid point at {latitude!r}, {longitude!r}, not near Lyon")
     offset = body.get("utc_offset_seconds")
@@ -382,37 +401,34 @@ def finite(value: object) -> float | None:
 
 
 def build(plan: Iterable[tuple[Request, Held]]) -> pl.DataFrame:
-    """The clean weather, from the responses a run has chosen."""
-    frames = [values_frame(request, held) for request, held in plan]
-    weather = pl.concat(frames) if frames else SCHEMA.to_frame()
-    return weather.sort("kind", "variable", "run", "time")
+    """The clean weather, one row per variable and hour of each response a run has chosen.
 
-
-def values_frame(request: Request, held: Held) -> pl.DataFrame:
-    """The values of one response, one row per variable and hour. An observed value later than
-    the reception of its response is left out: the archive fills the rest of the day with the
-    forecast. The columns are built as lists, and the times as whole microseconds, which Polars
-    takes far faster than Python datetimes."""
-    times: list[int] = []
-    names: list[str] = []
-    numbers: list[float] = []
-    for variable in VARIABLES:
-        for moment, value in held.values[variable.name]:
-            if request.run is None and moment > held.received_at:
-                continue
-            times.append(int(moment.timestamp()) * 1_000_000)
-            names.append(variable.name)
-            numbers.append(value)
-    frame = pl.DataFrame(
-        {"time": times, "variable": names, "value": numbers},
-        schema={"time": pl.Int64, "variable": SCHEMA["variable"], "value": pl.Float64},
+    The columns are built as lists, and the instants as whole microseconds, which Polars takes
+    far faster than Python datetimes.
+    """
+    columns: dict[str, list[int | str | float | None]] = {name: [] for name in SCHEMA.names()}
+    for request, held in plan:
+        run = None if request.run is None else microseconds(request.run)
+        received_at = microseconds(held.received_at)
+        for variable in VARIABLES:
+            for moment, value in held.values[variable.name]:
+                columns["time"].append(microseconds(moment))
+                columns["variable"].append(variable.name)
+                columns["value"].append(value)
+                columns["kind"].append(request.kind)
+                columns["run"].append(run)
+                columns["received_at"].append(received_at)
+    instants = ("time", "run", "received_at")
+    schema = {**SCHEMA, **dict.fromkeys(instants, pl.Int64())}
+    return (
+        pl.DataFrame(columns, schema=schema)
+        .with_columns(pl.col(*instants).cast(SCHEMA["time"]))
+        .sort("kind", "variable", "run", "time")
     )
-    return frame.with_columns(
-        pl.col("time").cast(SCHEMA["time"]),
-        pl.lit(request.kind, dtype=SCHEMA["kind"]).alias("kind"),
-        pl.lit(request.run, dtype=SCHEMA["run"]).alias("run"),
-        pl.lit(held.received_at, dtype=SCHEMA["received_at"]).alias("received_at"),
-    ).select(SCHEMA.names())
+
+
+def microseconds(moment: datetime) -> int:
+    return int(moment.timestamp()) * 1_000_000
 
 
 def check(

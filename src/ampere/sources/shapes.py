@@ -1,7 +1,7 @@
 """The shape of a source's responses: what every source checks before it reads a value."""
 
 import json
-from typing import Any, TypeIs
+from typing import Any, TypeGuard
 
 
 class SchemaError(ValueError):
@@ -16,11 +16,11 @@ def load_json(content: bytes, url: str) -> Any:
         raise SchemaError(f"{url}: not JSON ({error})") from error
 
 
-def is_int(value: object) -> TypeIs[int]:
+def is_int(value: object) -> TypeGuard[int]:
     """An integer, and not a boolean, which Python also takes for one."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def is_number(value: object) -> TypeIs[int | float]:
+def is_number(value: object) -> TypeGuard[int | float]:
     """An integer or a float, and not a boolean."""
     return isinstance(value, int | float) and not isinstance(value, bool)

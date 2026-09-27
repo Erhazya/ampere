@@ -146,7 +146,11 @@ class RawStore:
             if last is not None and last.sha256 == sha256:
                 self.repair(last, content)
                 return Saved(last, new=False)
-            if last is not None and fingerprint and self.alike(last, content, fingerprint):
+            if (
+                last is not None
+                and fingerprint is not None
+                and self.alike(last, content, fingerprint)
+            ):
                 return Saved(last, new=False)
             path = PurePosixPath(
                 source,

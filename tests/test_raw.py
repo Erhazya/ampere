@@ -173,7 +173,7 @@ def test_a_damaged_last_file_vouches_for_no_fingerprint(
 
 
 def test_an_identical_response_still_repairs_its_file_with_a_fingerprint(
-    store: RawStore,
+    store: RawStore, caplog: pytest.LogCaptureFixture
 ) -> None:
     receipt = save(store, b'{"price": 81.5, "took": 0.2}', fingerprint=without_took).receipt
     (store.root / receipt.path).unlink()
@@ -181,6 +181,9 @@ def test_an_identical_response_still_repairs_its_file_with_a_fingerprint(
     again = save(store, b'{"price": 81.5, "took": 0.2}', later, fingerprint=without_took)
     assert not again.new
     assert store.read(receipt) == b'{"price": 81.5, "took": 0.2}'
+    # The bytes are compared first: the log tells of a repair, not of a response kept beside.
+    assert "written again" in caplog.text
+    assert "kept beside it" not in caplog.text
 
 
 def test_each_request_has_its_own_history(store: RawStore) -> None:

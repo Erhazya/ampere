@@ -357,6 +357,17 @@ def test_an_observed_value_later_than_its_reception_is_left_out(
     assert value(observed, "temperature_c", utc(2026, 6, 20, 13)) == 16.5
 
 
+def test_a_month_whose_last_hours_came_after_its_reception_is_asked_again(
+    fake: FakeOpenMeteo, store: RawStore, clean: Path
+) -> None:
+    # Received on its last day at 13:00 UTC, June holds the rest of that day as a forecast: past
+    # its 14 days, it is still not whole, since its values end with its reception.
+    run(fake, store, clean, now=utc(2026, 6, 30, 13))
+    fake.requests.clear()
+    assert run(fake, store, clean, now=utc(2026, 7, 16, 12)) == Report()
+    assert "observed 2026-06-01 2026-06-30" in asked(fake)
+
+
 def test_a_later_run_asks_only_for_the_current_month_and_the_run_of_the_day(
     fake: FakeOpenMeteo, store: RawStore, clean: Path
 ) -> None:
@@ -407,7 +418,8 @@ def test_the_run_of_the_day_before_it_comes_is_neither_an_error_nor_a_warning(
     caplog.set_level(logging.INFO)
     assert run(fake, store, clean, now=utc(2026, 6, 20, 6)) == Report()
     assert asked(fake)[-1] == "run 2026-06-20T00:00"
-    assert "no run 2026-06-20T00:00 at Open-Meteo (HTTP 400)" in caplog.text
+    assert "no run 2026-06-20T00:00 at Open-Meteo" in caplog.text
+    assert "The requested model run is not available" in caplog.text
     assert weather(clean).filter(pl.col("run") == utc(2026, 6, 20)).is_empty()
     assert "2026-06-20T00:00" not in [r.request for r in store.receipts("openmeteo")]
 
@@ -420,6 +432,19 @@ def test_the_run_of_the_day_still_missing_from_noon_utc_is_a_warning(
     report = run(fake, store, clean, now=utc(2026, 6, 20) + timedelta(minutes=minute))
     assert report.errors == []
     assert report.warnings == (["run 2026-06-20T00:00: missing at 12:00 UTC"] if warned else [])
+
+
+def test_a_kept_run_stays_when_open_meteo_no_longer_gives_it(
+    fake: FakeOpenMeteo, store: RawStore, clean: Path
+) -> None:
+    fake.gaps.add((FORECAST, "wind_speed_10m", utc(2026, 6, 10, 5)))
+    run(fake, store, clean)
+    fake.missing_runs.add(date(2026, 6, 10))
+    fake.requests.clear()
+    report = run(fake, store, clean, now=LATER)
+    assert "run 2026-06-10T00:00" in asked(fake)
+    assert report.errors == ["run 2026-06-10T00:00 wind_speed_m_s: 1 of 48 hours missing"]
+    assert value(weather(clean), "temperature_c", utc(2026, 6, 10, 5), run=utc(2026, 6, 10)) == 13.0
 
 
 def test_a_missing_run_is_an_error_and_is_asked_again(
@@ -444,7 +469,7 @@ def test_a_run_with_missing_values_is_an_error_and_is_asked_again(
 
 
 def test_a_month_with_missing_values_is_asked_again_until_whole(
-    fake: FakeOpenMeteo, store: RawStore, clean: Path
+    fake: FakeOpenMeteo, store: RawStore, clean: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     # Its first hour, which a run may lack for a radiation but a month may not.
     fake.gaps.add((OBSERVED, "diffuse_radiation", utc(2026, 4, 1)))
@@ -452,6 +477,7 @@ def test_a_month_with_missing_values_is_asked_again_until_whole(
     assert report.errors == ["observed diffuse_w_m2 2026-04-01: 1 of 24 hours missing"]
     fake.requests.clear()
     run(fake, store, clean, now=LATER)
+    assert "observed 2026-04: the kept response lacks values, asked again" in caplog.text
     assert "observed 2026-04-01 2026-04-30" in asked(fake)
     fake.gaps.clear()
     fake.requests.clear()
@@ -520,13 +546,14 @@ def test_an_old_month_whose_last_response_is_faulty_is_asked_again(
 
 
 def test_a_damaged_file_of_an_old_month_is_fetched_again(
-    fake: FakeOpenMeteo, store: RawStore, clean: Path
+    fake: FakeOpenMeteo, store: RawStore, clean: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     run(fake, store, clean)
     april = next(r for r in store.receipts("openmeteo") if r.request == "2026-04")
     (store.root / april.path).write_bytes(b"damaged")
     fake.requests.clear()
     report = run(fake, store, clean, now=LATER)
+    assert f"observed 2026-04: a kept response is unusable ({april.path}: " in caplog.text
     assert "observed 2026-04-01 2026-04-30" in asked(fake)
     assert value(weather(clean), "temperature_c", utc(2026, 4, 19, 12)) == 16.0
     # The damaged file stays beside the new response, until a backup brings it back.
@@ -559,12 +586,15 @@ def test_just_after_midnight_in_paris_the_day_is_still_the_utc_one(
     assert report == Report(errors=["observed temperature_c 2026-06-20: 1 of 24 hours missing"])
 
 
-def test_another_error_on_a_run_stops_the_run(
-    fake: FakeOpenMeteo, store: RawStore, clean: Path
+@pytest.mark.parametrize("status", [400, 403])
+def test_another_refusal_of_a_run_stops_the_run(
+    fake: FakeOpenMeteo, store: RawStore, clean: Path, status: int
 ) -> None:
+    # Only a 400 that says the run is not available means a missing run: a 400 for another
+    # reason, such as a parameter Open-Meteo no longer takes, stops everything.
     (launch,) = runs(date(2026, 6, 12), date(2026, 6, 12))
-    fake.statuses[launch.url] = 403
-    with pytest.raises(httpx2.HTTPStatusError, match="403"):
+    fake.statuses[launch.url] = status
+    with pytest.raises(httpx2.HTTPStatusError, match=str(status)):
         run(fake, store, clean)
 
 
@@ -643,6 +673,7 @@ def test_a_response_gives_its_values_and_leaves_its_nulls_out() -> None:
         (b"[]", "not an object"),
         (response(latitude=48.85), "a grid point at 48.85, 4.8264985, not near Lyon"),
         (response(longitude="4.83"), "not near Lyon"),
+        (response(latitude=10**400), "not near Lyon"),
         (response(utc_offset_seconds=7200), "hours with an offset of 7200 s, not in UTC"),
         (response(utc_offset_seconds=False), "not in UTC"),
         (
@@ -698,6 +729,8 @@ def test_the_fingerprint_leaves_out_generationtime_ms_and_the_order_of_the_keys(
     moved = one | {"elevation": 162.0}
     assert fingerprint(json.dumps(moved).encode()) != fingerprint(json.dumps(one).encode())
     assert fingerprint(b"<html>") == b"<html>"
+    deep = b"[" * 100_000 + b"]" * 100_000
+    assert fingerprint(deep) == deep
 
 
 Row = tuple[datetime, str, float, str, datetime | None]
