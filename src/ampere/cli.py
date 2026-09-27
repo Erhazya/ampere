@@ -41,12 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = commands.add_parser(
         "ingest", help="fetch a source into the raw layer, then rebuild and check its clean data"
     )
-    ingest.add_argument("source", choices=["smard", "eco2mix", "openmeteo"])
+    ingest.add_argument("source", choices=["smard", "eco2mix", "openmeteo", "enedis"])
     ingest.add_argument(
         "--full",
         action="store_true",
         help="ask again for the whole history since 1 July 2023, not only what can still change "
-        "(about 170 requests for SMARD, 82 for éCO2mix, 970 for Open-Meteo)",
+        "(about 170 requests for SMARD, 82 for éCO2mix, 970 for Open-Meteo, 80 for Enedis)",
     )
     return parser
 
@@ -90,9 +90,14 @@ def ingest_source(name: str, *, full: bool) -> int:
     from ampere.data.folders import data_root
     from ampere.data.http import client
     from ampere.data.raw import RawStore
-    from ampere.sources import eco2mix, openmeteo, smard
+    from ampere.sources import eco2mix, enedis, openmeteo, smard
 
-    ingest = {"smard": smard.ingest, "eco2mix": eco2mix.ingest, "openmeteo": openmeteo.ingest}[name]
+    ingest = {
+        "smard": smard.ingest,
+        "eco2mix": eco2mix.ingest,
+        "openmeteo": openmeteo.ingest,
+        "enedis": enedis.ingest,
+    }[name]
 
     root = data_root()
     log.info("data folder: %s", root)

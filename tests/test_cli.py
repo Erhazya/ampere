@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 import ampere
 from ampere import cli
 from ampere.data.clean import Report
-from ampere.sources import eco2mix, openmeteo, smard
+from ampere.sources import eco2mix, enedis, openmeteo, smard
 from ampere.sources.shapes import SchemaError
 
 
@@ -232,6 +232,22 @@ def test_ingest_openmeteo_runs_its_own_source(
     assert (date(2023, 7, 1), date(2024, 3, 14)) == (openmeteo.SINCE, openmeteo.FIRST_RUN)
     assert ("ampere", logging.ERROR, "run 2026-06-12T00:00: missing") in caplog.record_tuples
     assert "openmeteo: 0 invalid rows, 1 errors, 0 warnings" in caplog.text
+
+
+def test_ingest_enedis_runs_its_own_source(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ampere")
+    prices = fake_ingest(monkeypatch, Report())
+    empty = "solar 2026-05: the last response is empty, the one received at 2026-08-10 is used"
+    curves = fake_ingest(monkeypatch, Report(warnings=[empty]), enedis)
+    assert cli.main(["ingest", "enedis", "--full"]) == 0
+    assert prices == []
+    assert curves[0]["clean"] == data / "clean" and curves[0]["full"] is True
+    assert "since" not in curves[0]
+    assert date(2023, 7, 1) == enedis.SINCE
+    assert ("ampere", logging.WARNING, empty) in caplog.record_tuples
+    assert "enedis: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
 
 def test_ingest_has_no_option_to_shorten_the_history() -> None:

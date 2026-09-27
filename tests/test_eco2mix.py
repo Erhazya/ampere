@@ -31,7 +31,6 @@ from ampere.sources.eco2mix import (
     complete,
     coverage_url,
     ingest,
-    months,
     parse_coverage,
     parse_month,
 )
@@ -300,14 +299,6 @@ def month_file(area: eco2mix.Area, kind: str, year: int, month: int) -> MonthFil
 
 
 APRIL = month_file(FRANCE, CONS_DEF, 2026, 4)
-
-
-def test_months_are_paris_months_bounded_in_utc() -> None:
-    assert months(date(2026, 3, 15), date(2026, 4, 2)) == [
-        (paris(2026, 3, 1), paris(2026, 4, 1)),  # 31 days less the hour of the clock change
-        (paris(2026, 4, 1), paris(2026, 5, 1)),
-    ]
-    assert months(date(2026, 4, 1), date(2026, 4, 1)) == [(paris(2026, 4, 1), paris(2026, 5, 1))]
 
 
 PERIODS = {

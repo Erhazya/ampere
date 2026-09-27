@@ -61,3 +61,14 @@ def first_pass(instant: datetime) -> bool:
 def every_day(first: date, last: date) -> Iterator[date]:
     """Each day from first to last, both included; none when last comes before first."""
     return (first + timedelta(days=n) for n in range((last - first).days + 1))
+
+
+def paris_months(first: date, last: date) -> list[tuple[datetime, datetime]]:
+    """The Paris months from the one holding `first` to the one holding `last`, bounded in UTC."""
+    bounds = []
+    month = first.replace(day=1)
+    while month <= last:
+        following = (month + timedelta(days=31)).replace(day=1)
+        bounds.append((day_bounds(month)[0], day_bounds(following)[0]))
+        month = following
+    return bounds
