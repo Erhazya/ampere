@@ -24,7 +24,7 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - **Tests de bout en bout** : Playwright, avec `ecc-e2e-testing`.
 - **Images Docker** : `ecc-docker-patterns`.
 - **Décisions** : `ecc-architecture-decision-records`, au format des ADR du projet.
-- **Pull requests** : `/ecc-pr` pour la préparer ; avant la fusion, `/code-review`, `/security-review` et l'agent `ecc-pr-test-analyzer` ; l'agent `ecc-silent-failure-hunter` sur le code qui gère des erreurs.
+- **Pull requests** : `/ecc-pr` pour la préparer ; avant la fusion, une seule série de relectures, proportionnée à la PR : `/code-review` en effort moyen et `/security-review`, plus l'agent `ecc-silent-failure-hunter` sur le code qui gère beaucoup d'erreurs. Les mutations faites à la main portent sur les règles nouvelles et tournent en arrière-plan. Choix de l'auteur du 27 septembre 2026, pour ne plus empiler les séries de relectures.
 
 ## Commandes et conventions
 
