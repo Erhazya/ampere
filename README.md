@@ -2,7 +2,7 @@
 
 A digital twin of a 200-house neighbourhood's energy, fed with real public French data.
 
-> **Status: work in progress.** The design is done and the foundations are being built. A first skeleton is online at <https://ampere.146-19-168-222.sslip.io>: for now, it only shows whether the API answers.
+> **Status: work in progress.** The design and the foundations are done, and the data pipeline comes next. A first skeleton is online at <https://ampere.146-19-168-222.sslip.io>: for now, it only shows whether the API answers.
 
 [Version française](README.fr.md)
 
@@ -32,7 +32,7 @@ The full reasoning is in the design document and the architecture decision recor
 | Step | Content | Status |
 |---|---|---|
 | 0 | Design | Done |
-| 1 | Foundations: repository, CI, deployed skeleton | In progress |
+| 1 | Foundations: repository, CI, deployed skeleton | Done |
 | 2 | Data: daily ingestion and quality checks | To do |
 | 3 | Simulation: houses, solar panels, batteries | To do |
 | 4 | Control: simple rule vs MILP | To do |

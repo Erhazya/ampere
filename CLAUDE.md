@@ -73,10 +73,10 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 ### Avancement
 
 - Étape 0 (conception) terminée le 23 septembre 2026.
-- Étape 1 (fondations : dépôt, CI, squelette déployé) en cours, sur le VPS depuis le 23 septembre 2026 (ADR 013 et 014).
+- Étape 1 (fondations : dépôt, CI, squelette déployé) terminée le 27 septembre 2026, menée sur le VPS depuis le 23 septembre (ADR 013 et 014).
   - Python 3.13 par uv, Node.js 24 par fnm, Docker rootless ; outils de qualité ruff, mypy et pytest.
   - Tableau de bord : npm, ESLint et Prettier, Vitest et Testing Library (ADR 015).
-  - Dépôt GitHub privé jusqu'à la fin de l'étape 1, puis public.
+  - Dépôt GitHub public depuis le 27 septembre 2026. `main` est protégée pour tout le monde, administrateur compris : pull request obligatoire, et contrôles « Python », « Dashboard », « Image » et gitleaks verts sur une branche à jour (ADR 019).
   - Le brief, les prompts et `TRANSFERT.md` restent locaux, ignorés par Git.
 - Incréments 1 (squelette Python) et 2 (API minimale) terminés.
 - Incrément 3 terminé : squelette `web/`, outils, relais `/api` (ADR 016), styles en CSS Modules (ADR 017), couche qui interroge l'API, et écran d'état dessiné d'abord dans Figma.
@@ -85,4 +85,5 @@ Les skills et agents ci-dessous sont installés pour la session Claude Code, dan
 - Incrément 5 terminé : image Docker vérifiée sur chaque pull request, publiée sur GHCR depuis `main` (ADR 020).
 - Incrément 7 : démo en ligne depuis le 26 septembre 2026 sur https://ampere.146-19-168-222.sslip.io, déployée par la plateforme du socle ; paquet GHCR public (ADR 021).
 - Déploiement automatique et retour arrière essayés le 26 septembre 2026 (mesure 8 du socle) ; la mesure définitive suit la fusion suivante.
-- Prochaine action : l'incrément 6, le dépôt public (`TRANSFERT.md`, section 7).
+- Incrément 6 terminé le 27 septembre 2026 : dépôt public, `main` protégée, analyse des secrets de GitHub, alertes et correctifs Dependabot, actions limitées à une liste et désignées par leur empreinte, workflows des comptes extérieurs soumis à approbation.
+- Prochaine action : l'étape 2, les données.

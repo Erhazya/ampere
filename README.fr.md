@@ -2,7 +2,7 @@
 
 Le jumeau numérique énergétique d'un quartier de 200 maisons, alimenté par de vraies données publiques françaises.
 
-> **Statut : en construction.** La conception est terminée et les fondations sont en cours. Un premier squelette est en ligne sur <https://ampere.146-19-168-222.sslip.io> : pour l'instant, il indique seulement si l'API répond.
+> **Statut : en construction.** La conception et les fondations sont terminées, et la collecte des données vient ensuite. Un premier squelette est en ligne sur <https://ampere.146-19-168-222.sslip.io> : pour l'instant, il indique seulement si l'API répond.
 
 [English version](README.md)
 
@@ -32,7 +32,7 @@ Le raisonnement complet est dans la [conception](docs/conception.md), les [déci
 | Étape | Contenu | Statut |
 |---|---|---|
 | 0 | Conception | Terminée |
-| 1 | Fondations : dépôt, CI, squelette déployé | En cours |
+| 1 | Fondations : dépôt, CI, squelette déployé | Terminée |
 | 2 | Données : ingestion quotidienne et contrôles de qualité | À faire |
 | 3 | Simulation : maisons, panneaux solaires, batteries | À faire |
 | 4 | Pilotage : règle simple contre MILP | À faire |

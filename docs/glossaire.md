@@ -86,7 +86,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Contexte de construction** : les fichiers que `docker build` envoie au moteur de construction, et que le Dockerfile peut copier. Le fichier `.dockerignore` en écarte tout ce qui n'est pas utile, comme les notes locales ou l'environnement virtuel (ADR 020).
 
-**Contrôle obligatoire** : statut de la CI qui doit être vert pour qu'une pull request puisse être fusionnée. Sur un compte GitHub gratuit, seul un dépôt public peut en imposer (ADR 019).
+**Contrôle obligatoire** : statut de la CI qui doit être vert pour qu'une pull request puisse être fusionnée. Sur un compte GitHub gratuit, seul un dépôt public peut en imposer (ADR 019). Depuis la publication du dépôt, le 27 septembre 2026, `main` en impose quatre : « Python », « Dashboard », « Image » et gitleaks.
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
