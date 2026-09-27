@@ -18,8 +18,11 @@ from ampere.sources.smard import (
     QUARTER_HOURS_FROM,
     Report,
     SchemaError,
+    SCHEMA,
     build,
+    check,
     ingest,
+    parse_index,
     parse_series,
     resolutions,
 )
@@ -256,7 +259,7 @@ def test_a_price_outside_the_market_limits_is_an_error(
     assert errors[0] == "2025-10-05 22:00 UTC: 9000.0 €/MWh, outside -500 to 5000"
 
 
-@pytest.mark.parametrize(("hour", "warned"), [(15, True), (11, False)])
+@pytest.mark.parametrize(("hour", "warned"), [(15, True), (14, True), (13, False)])
 def test_prices_missing_for_tomorrow_are_a_warning_in_the_afternoon(
     smard: FakeSmard, store: RawStore, clean: Path, hour: int, warned: bool
 ) -> None:
@@ -318,3 +321,95 @@ def test_the_clean_prices_come_from_the_archive_alone(
 ) -> None:
     run(smard, store, clean)
     assert build(RawStore(store.root), since=SINCE).equals(prices(clean))
+
+
+def test_a_first_day_in_the_middle_of_a_week_keeps_only_its_days(
+    smard: FakeSmard, store: RawStore, clean: Path
+) -> None:
+    run(smard, store, clean, since=date(2025, 9, 24))
+    assert f"{BASE}/254_DE_hour_{ms(datetime(2025, 9, 21, 22, tzinfo=UTC))}.json" in smard.requests
+    frame = prices(clean)
+    assert frame["start"].min() == day_bounds(date(2025, 9, 24))[0]
+    assert frame.height == 16 * 96
+
+
+def test_a_gap_today_is_an_error_too(smard: FakeSmard, store: RawStore, clean: Path) -> None:
+    today = 2 * 96 + 10  # a quarter-hour of Wednesday 8 October
+    smard.week(
+        "quarterhour",
+        date(2025, 10, 6),
+        count=4 * 96,
+        price=lambda i: None if i == today else quarterly(i),
+    )
+    assert run(smard, store, clean).errors == ["2025-10-08: 1 of 96 quarter-hours missing"]
+
+
+def test_a_damaged_raw_file_is_an_error(smard: FakeSmard, store: RawStore, clean: Path) -> None:
+    run(smard, store, clean)
+    old = next(r for r in store.receipts("smard") if r.dataset == "prices-hour")
+    (store.root / old.path).write_bytes(b"damaged")
+    with pytest.raises(ValueError, match="damaged|does not match|Not a gzipped"):
+        run(smard, store, clean)
+
+
+def frame(*rows: tuple[datetime, float]) -> pl.DataFrame:
+    received = datetime(2025, 10, 8, tzinfo=UTC)
+    return pl.DataFrame(
+        [(start, price, 15, received) for start, price in rows], schema=SCHEMA, orient="row"
+    )
+
+
+def day(first: date, price: float = 50.0) -> list[tuple[datetime, float]]:
+    start = day_bounds(first)[0]
+    return [(start + timedelta(minutes=15 * i), price) for i in range(96)]
+
+
+def test_the_checks_report_duplicates_and_quarter_hours_off_the_grid(store: RawStore) -> None:
+    rows = day(date(2025, 10, 7))
+    moment = rows[5][0]
+    errors = check(
+        frame(*rows, (moment, 51.0), (moment + timedelta(minutes=7), 50.0)),
+        store,
+        since=date(2025, 10, 7),
+        now=datetime(2025, 10, 7, 12, tzinfo=PARIS),
+    ).errors
+    assert f"{moment:%Y-%m-%d %H:%M} UTC: 2 prices" in errors
+    assert f"{moment + timedelta(minutes=7):%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour" in errors
+
+
+def test_a_duplicate_does_not_hide_a_missing_quarter_hour(store: RawStore) -> None:
+    rows = day(date(2025, 10, 7))
+    duplicated = [*rows[:40], rows[39], *rows[41:]]  # the 41st quarter-hour replaced by a copy
+    errors = check(
+        frame(*duplicated),
+        store,
+        since=date(2025, 10, 7),
+        now=datetime(2025, 10, 7, 12, tzinfo=PARIS),
+    ).errors
+    assert "2025-10-07: 1 of 96 quarter-hours missing" in errors
+
+
+def test_a_raw_layer_problem_is_a_check_error(store: RawStore) -> None:
+    (store.root / "smard").mkdir()
+    (store.root / "smard" / "manifest.jsonl").write_text("")
+    (store.root / "smard" / "stray.json.gz").write_bytes(b"x")
+    errors = check(
+        frame(*day(date(2025, 10, 7))),
+        store,
+        since=date(2025, 10, 7),
+        now=datetime(2025, 10, 7, 12, tzinfo=PARIS),
+    ).errors
+    assert errors == ["raw layer: smard/stray.json.gz: not in the manifest"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"[]", b"{}", b'{"timestamps": []}', b'{"timestamps": ["1759096800000"]}', b"not json"],
+)
+def test_an_index_must_list_the_week_starts(body: bytes) -> None:
+    with pytest.raises(SchemaError, match=re.escape("https://example.test/index.json")):
+        parse_index(body, "https://example.test/index.json")
+
+
+def test_the_index_is_read_oldest_first() -> None:
+    assert parse_index(b'{"timestamps": [3, 1, 2]}', "https://example.test/index.json") == [1, 2, 3]
