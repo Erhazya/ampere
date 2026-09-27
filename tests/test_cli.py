@@ -239,13 +239,14 @@ def test_ingest_enedis_runs_its_own_source(
 ) -> None:
     caplog.set_level(logging.INFO, logger="ampere")
     prices = fake_ingest(monkeypatch, Report())
-    curves = fake_ingest(monkeypatch, Report(warnings=["solar: nothing published"]), enedis)
+    empty = "solar 2026-05: the last response is empty, the one received at 2026-08-10 is used"
+    curves = fake_ingest(monkeypatch, Report(warnings=[empty]), enedis)
     assert cli.main(["ingest", "enedis", "--full"]) == 0
     assert prices == []
     assert curves[0]["clean"] == data / "clean" and curves[0]["full"] is True
     assert "since" not in curves[0]
     assert date(2023, 7, 1) == enedis.SINCE
-    assert ("ampere", logging.WARNING, "solar: nothing published") in caplog.record_tuples
+    assert ("ampere", logging.WARNING, empty) in caplog.record_tuples
     assert "enedis: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
 

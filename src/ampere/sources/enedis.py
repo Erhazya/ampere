@@ -5,9 +5,10 @@ Enedis publishes a three-year window every quarter. Each run reads the date of t
 publication of both datasets in the metadata of Enedis's native API. For 7 days after a new
 publication, it asks for the Paris months from July 2023 to the current one, one Parquet export per
 month, through the compatibility layer of the old API; the rest of the time, only the months whose
-last response does not read, or is empty between published months. It keeps every response in the
-raw layer, rebuilds clean/enedis/consumption.parquet and clean/enedis/solar.parquet from the last
-readable response with rows of each month, and checks them.
+last response does not read, or is empty inside the window, the three years that end with the last
+month published. It keeps every response in the raw layer, rebuilds
+clean/enedis/consumption.parquet and clean/enedis/solar.parquet from the last readable response
+with rows of each month, and checks them.
 """
 
 import io
@@ -56,6 +57,9 @@ HALF_HOUR = timedelta(minutes=30)
 # A publication covers up to about a month before its date: a clean table that ends much earlier
 # lacks some of it.
 LAGGING = timedelta(days=60)
+# Over three years, the statistical secrecy masks at most 7.7 % of the global curve of a month
+# for homes, and 1.2 % for rooftop solar: far more is a publication that masks it by mistake.
+MASKED_AT_MOST = 0.2
 # The step of a value that stands for a whole day: a count of sites, or a curve that the
 # statistical secrecy only publishes as the mean of its day.
 DAY_MINUTES = 1440
@@ -81,8 +85,9 @@ STARTS = pl.col("horodate").dt.cast_time_unit("us").dt.replace_time_zone("UTC")
 class Dataset:
     """A dataset of Enedis as Ampère takes it: its name there and in the raw and clean layers, the
     filter of its rows and the values it allows, its segment columns with their clean names, its
-    count and total columns, the most a mean curve can be, in W, and the segments it must have,
-    each as its values in the order of its columns."""
+    count and total columns, the most a mean curve can be, in W, the segments it must have, each
+    as its values in the order of its columns, and its window: the number of months Enedis
+    publishes, which end with the last month published."""
 
     name: str
     kind: str
@@ -94,6 +99,7 @@ class Dataset:
     total: str
     highest_mean: float
     expected: tuple[tuple[str, ...], ...]
+    window: int
 
     @property
     def keys(self) -> list[str]:
@@ -167,34 +173,38 @@ HOME_PROFILES = {
     ),
 }
 CONSUMPTION = Dataset(
-    "conso-inf36-region",
-    "consumption",
-    "code_region='84' and startswith(profil, 'RES')",
-    (("code_region", ("84",)),),
-    (("profil", "RES"),),
-    (("profil", "profile"), ("plage_de_puissance_souscrite", "power_range")),
-    "nb_points_soutirage",
-    "total_energie_soutiree_wh",
-    36_000,
-    tuple((profile, power) for profile, ranges in HOME_PROFILES.items() for power in ranges),
+    name="conso-inf36-region",
+    kind="consumption",
+    where="code_region='84' and startswith(profil, 'RES')",
+    allowed=(("code_region", ("84",)),),
+    prefixed=(("profil", "RES"),),
+    segment=(("profil", "profile"), ("plage_de_puissance_souscrite", "power_range")),
+    sites="nb_points_soutirage",
+    total="total_energie_soutiree_wh",
+    highest_mean=36_000,
+    expected=tuple(
+        (profile, power) for profile, ranges in HOME_PROFILES.items() for power in ranges
+    ),
+    window=36,
 )
 ROOFTOPS = ("P1 : ]0 - 3] kW", "P2 : ]3 - 9] kW")
 SOLAR = Dataset(
-    "prod-region",
-    "solar",
-    "code_region='84' and filiere_de_production='F5 : Solaire' and "
+    name="prod-region",
+    kind="solar",
+    where="code_region='84' and filiere_de_production='F5 : Solaire' and "
     f"plage_de_puissance_injection in ('{ROOFTOPS[0]}', '{ROOFTOPS[1]}')",
-    (
+    allowed=(
         ("code_region", ("84",)),
         ("filiere_de_production", ("F5 : Solaire",)),
         ("plage_de_puissance_injection", ROOFTOPS),
     ),
-    (),
-    (("plage_de_puissance_injection", "power_range"),),
-    "nb_points_injection",
-    "total_energie_injectee_wh",
-    9_000,
-    tuple((power,) for power in ROOFTOPS),
+    prefixed=(),
+    segment=(("plage_de_puissance_injection", "power_range"),),
+    sites="nb_points_injection",
+    total="total_energie_injectee_wh",
+    highest_mean=9_000,
+    expected=tuple((power,) for power in ROOFTOPS),
+    window=36,
 )
 DATASETS = (CONSUMPTION, SOLAR)
 
@@ -243,8 +253,8 @@ def ingest(
 ) -> Report:
     """Read the date of the last publication of each dataset. For 7 days after a new one, or when
     full, fetch every month; otherwise only those whose last response does not read, or is empty
-    between published months. Then rebuild each clean file from the last readable response with
-    rows of each month, check it, and replace it if its rows are valid."""
+    inside the window. Then rebuild each clean file from the last readable response with rows of
+    each month, check it, and replace it if its rows are valid."""
     kept = len(store.receipts(SOURCE))
     report = Report()
     publications: dict[str, datetime] = {}
@@ -297,8 +307,9 @@ def ingest(
                 report.errors.append(str(error))
     history = responses(store)
     for dataset in datasets:
-        frame, warnings = build(store, history, dataset, since=since, today=paris_day(now))
-        report.warnings.extend(warnings)
+        frame, built = build(store, history, dataset, since=since, today=paris_day(now))
+        report.errors.extend(built.errors)
+        report.warnings.extend(built.warnings)
         report.warnings.extend(late_months(frame, dataset, publications.get(dataset.name)))
         found = check(frame, dataset, since=since, now=now)
         report.invalid.extend(found.invalid)
@@ -363,20 +374,21 @@ def to_ask(
     store: RawStore, history: dict[tuple[str, str], list[Receipt]], wanted: list[Month]
 ) -> list[Month]:
     """The months to ask for again outside the days after a publication: those without a
-    readable last response, and those whose last response is empty although Enedis publishes
-    months before and after them. The months before its window, or not yet published, stay
-    empty."""
+    readable last response, and those whose last response is empty although they belong to the
+    window of their dataset, the months that end with the last one published. The months that
+    have left it, and those not published yet, stay empty."""
     counts: list[int | None] = []
     for month in wanted:
         receipts = history.get((month.dataset.kind, month.name), [])
         raw = rows_of(store, receipts[-1], month) if receipts else None
         counts.append(None if raw is None else raw.height)
-    published = [i for i, count in enumerate(counts) if count]
-    between = range(published[0] + 1, published[-1]) if published else range(0)
+    with_rows = [i for i, count in enumerate(counts) if count]
+    size = wanted[0].dataset.window if wanted else 0
+    window = range(with_rows[-1] - size + 1, with_rows[-1]) if with_rows else range(0)
     return [
         month
         for i, (month, count) in enumerate(zip(wanted, counts, strict=True))
-        if count is None or (count == 0 and i in between)
+        if count is None or (count == 0 and i in window)
     ]
 
 
@@ -398,35 +410,34 @@ def build(
     *,
     since: date,
     today: date,
-) -> tuple[pl.DataFrame, list[str]]:
+) -> tuple[pl.DataFrame, Report]:
     """The clean table of a dataset, each month from its last readable response with rows: the
-    last publication wins, even with fewer rows. A month that has left the window of Enedis, at
-    its start, comes back empty and keeps the version last published. Anywhere else, a warning
-    says when a month comes from an older response, its last one being empty or unreadable."""
+    last publication wins, even with fewer rows.
+
+    When the last response of a month does not read, or is empty, the latest older one with rows
+    serves, with a warning, unless the month has left the window, the months that end with the
+    last one published: it then keeps the version last published. An error when no last
+    response has rows at all, as when the filter no longer matches what Enedis publishes.
+    """
     frames = []
-    warnings = []
-    # Whether the last response of an earlier month has rows: the window has started.
-    started = False
-    for month in months(dataset, since, today):
+    report = Report()
+    # The months taken from an older response, judged once the last month published is known.
+    older: list[tuple[int, Month, str, Receipt]] = []
+    last_published: int | None = None
+    for i, month in enumerate(months(dataset, since, today)):
         receipts = history.get((dataset.kind, month.name), [])
         if not receipts:
             continue
-        chosen: tuple[pl.DataFrame, Receipt] | None
         last = rows_of(store, receipts[-1], month)
         if last is not None and last.height:
-            chosen = last, receipts[-1]
-            started = True
+            raw, receipt = last, receipts[-1]
+            last_published = i
         else:
-            chosen = latest_with_rows(store, receipts[:-1], month)
-            if chosen is not None and (started or last is None):
-                warnings.append(
-                    f"{dataset.kind} {month.name}: the last response "
-                    f"{'does not read' if last is None else 'is empty'}, the one received at "
-                    f"{chosen[1].received_at:%Y-%m-%d %H:%M:%S} UTC is used"
-                )
-        if chosen is None:
-            continue
-        raw, receipt = chosen
+            found = latest_with_rows(store, receipts[:-1], month)
+            if found is None:
+                continue
+            raw, receipt = found
+            older.append((i, month, "is empty" if last is not None else "does not read", receipt))
         frames.append(
             month_values(raw, month).with_columns(
                 pl.lit(receipt.received_at, dtype=dataset.schema["received_at"]).alias(
@@ -434,9 +445,21 @@ def build(
                 )
             )
         )
+    if older and last_published is None:
+        report.errors.append(
+            f"{dataset.kind}: the last response of every month is empty or unreadable, older "
+            "ones are used"
+        )
+    for i, month, why, receipt in older:
+        inside = last_published is not None and i > last_published - dataset.window
+        if why == "does not read" or inside:
+            report.warnings.append(
+                f"{dataset.kind} {month.name}: the last response {why}, the one received at "
+                f"{receipt.received_at:%Y-%m-%d %H:%M:%S} UTC is used"
+            )
     # Month after month, each sorted within itself: a sort of the whole table would copy it.
     frame = pl.concat(frames, rechunk=False) if frames else dataset.schema.to_frame()
-    return frame.select(dataset.schema.names()), warnings
+    return frame.select(dataset.schema.names()), report
 
 
 def parse_publication(content: bytes, url: str) -> datetime:
@@ -494,8 +517,8 @@ def read_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
 def check_rows(raw: pl.DataFrame, month: Month, url: str) -> None:
     """The rows of a monthly export must be in the month, on the half-hour, of the region and
     segments asked, once each, with finite numbers and known indices. A curve is missing exactly
-    when its index says that the statistical secrecy masks it, and a total only when the curves
-    are masked."""
+    when its index says that the statistical secrecy masks it, and a total only when the three
+    curves are masked."""
     dataset = month.dataset
     sources = [source for source, _ in dataset.segment]
     named = {
@@ -526,10 +549,13 @@ def check_rows(raw: pl.DataFrame, month: Month, url: str) -> None:
     for curve, index in INDICES.items():
         if raw.filter(~pl.col(index).str.contains(r"^(\d+|< 1|S)$")).height:
             raise SchemaError(f"{url}: an unexpected {index}")
-        if raw.filter(pl.col(curve).is_null() != (pl.col(index) == "S")).height:
-            raise SchemaError(f"{url}: a {curve} missing without {index} at S, or the reverse")
-    masked = pl.col(INDICES[CURVES["mean_w"]]) == "S"
-    if raw.filter(pl.col(dataset.total).is_null() & ~masked).height:
+        secret = pl.col(index) == "S"
+        if raw.filter(pl.col(curve).is_null() & ~secret).height:
+            raise SchemaError(f"{url}: a {curve} missing without {index} at S")
+        if raw.filter(pl.col(curve).is_not_null() & secret).height:
+            raise SchemaError(f"{url}: a {curve} given with {index} at S")
+    all_masked = pl.all_horizontal(pl.col(index) == "S" for index in INDICES.values())
+    if raw.filter(pl.col(dataset.total).is_null() & ~all_masked).height:
         raise SchemaError(f"{url}: a {dataset.total} missing where the curves are published")
 
 
@@ -635,11 +661,11 @@ def late_months(frame: pl.DataFrame, dataset: Dataset, published: datetime | Non
 
 
 def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) -> Report:
-    """Invalid rows; errors for an expected segment never published, and for each half-hour a
-    segment lacks, known by its count of sites, from the start of the history to the last
-    half-hour published; warnings when that last half-hour is too old or does not end a Paris
-    month, and for a segment not expected. The statistical secrecy masks some totals and curves:
-    they are no gaps."""
+    """Invalid rows; errors for an expected segment never published, and for each half-hour an
+    expected segment lacks, known by its count of sites, from the start of the history to the
+    last half-hour published. Warnings when that last half-hour is too old or does not end a
+    quarter, when the secrecy masks too much of a month, and for a segment not expected. The
+    statistical secrecy masks some totals and curves: they are no gaps."""
     report = Report(invalid=invalid_rows(frame, dataset))
     last = frame["start"].max()
     if not isinstance(last, datetime):
@@ -651,12 +677,12 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
             f"{dataset.kind}: the last half-hour published ends at {end:%Y-%m-%d %H:%M} UTC, "
             f"more than {STALE_AFTER.days} days ago"
         )
-    # Enedis publishes whole months: a table that ends within one lacks the rest of it.
+    # Enedis publishes whole quarters: a table that ends within one lacks the rest of it.
     local = end.astimezone(PARIS)
-    if (local.day, local.hour, local.minute) != (1, 0, 0):
+    if (local.month % 3, local.day, local.hour, local.minute) != (1, 1, 0, 0):
         report.warnings.append(
             f"{dataset.kind}: the last half-hour published ends at {end:%Y-%m-%d %H:%M} UTC, "
-            "before the end of its month"
+            "before the end of its quarter: run --full"
         )
     days = list(every_day(since, paris_day(last)))
     # One count of sites per segment and half-hour: a double is a fault of the shape of its month,
@@ -679,14 +705,18 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
         .sort(dataset.keys)
         .rows()
     )
-    report.errors.extend(
-        f"{dataset.kind} {' '.join(segment)}: nothing published"
-        for segment in dataset.expected
-        if segment not in segments
+    report.warnings.extend(
+        f"{dataset.kind} {' '.join(segment)}: not an expected segment"
+        for segment in segments
+        if segment not in dataset.expected
     )
-    for segment in segments:
-        if segment not in dataset.expected:
-            report.warnings.append(f"{dataset.kind} {' '.join(segment)}: not an expected segment")
+    report.warnings.extend(masked_months(frame, dataset))
+    # Only the expected segments: one Enedis renames keeps its old name in the months that have
+    # left the window, where it would lack every day after them.
+    for segment in dataset.expected:
+        if segment not in segments:
+            report.errors.append(f"{dataset.kind} {' '.join(segment)}: nothing published")
+            continue
         for day in days:
             expected = quarter_hours(day) // 2
             found = counts.get((*segment, day), 0)
@@ -696,6 +726,29 @@ def check(frame: pl.DataFrame, dataset: Dataset, *, since: date, now: datetime) 
                     f"{expected - found} of {expected} half-hours missing"
                 )
     return report
+
+
+def masked_months(frame: pl.DataFrame, dataset: Dataset) -> list[str]:
+    """A warning for each Paris month whose global curve the statistical secrecy masks more than
+    MASKED_AT_MOST of the time: the share of half-hours with a count of sites but no curve."""
+    month = pl.col("start").dt.convert_time_zone(PARIS.key).dt.strftime("%Y-%m").alias("month")
+    shares = (
+        frame.lazy()
+        .group_by(month)
+        .agg(
+            (pl.col("measure") == "sites").sum().alias("sites"),
+            (pl.col("measure") == "mean_w").sum().alias("curves"),
+        )
+        .with_columns((1 - pl.col("curves") / pl.col("sites")).alias("masked"))
+        .filter(pl.col("masked") > MASKED_AT_MOST)
+        .sort("month")
+        .collect(engine="streaming")
+    )
+    return [
+        f"{dataset.kind} {month}: the statistical secrecy masks {masked:.0%} of the global curve, "
+        f"more than {MASKED_AT_MOST:.0%}"
+        for month, _, _, masked in shares.rows()
+    ]
 
 
 def invalid_rows(frame: pl.DataFrame, dataset: Dataset) -> list[str]:
