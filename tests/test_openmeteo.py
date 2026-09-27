@@ -19,6 +19,7 @@ from ampere.data.http import UnexpectedResponse, client
 from ampere.data.raw import RawStore
 from ampere.sources.openmeteo import (
     FORECAST,
+    KNOWN_GAPS,
     OBSERVED,
     SCHEMA,
     Request,
@@ -208,12 +209,21 @@ def run(
     now: datetime = NOW,
     full: bool = False,
     pauses: list[float] | None = None,
+    known_gaps: frozenset[str] = frozenset(),
 ) -> Report:
     fake.now = now
     with client(httpx2.MockTransport(fake.handle)) as http:
         sleep = pauses.append if pauses is not None else (lambda seconds: None)
         return ingest(
-            http, store, clean, now=now, since=SINCE, first_run=FIRST_RUN, full=full, sleep=sleep
+            http,
+            store,
+            clean,
+            now=now,
+            since=SINCE,
+            first_run=FIRST_RUN,
+            known_gaps=known_gaps,
+            full=full,
+            sleep=sleep,
         )
 
 
@@ -378,15 +388,27 @@ def test_a_later_run_asks_only_for_the_current_month_and_the_run_of_the_day(
 
 
 @pytest.mark.parametrize(
-    ("now", "again"), [(utc(2026, 6, 14, 23), True), (utc(2026, 6, 15), False)]
+    ("now", "months_asked", "last_run"),
+    [
+        (utc(2026, 6, 14, 23), ["2026-05-01 2026-05-31", "2026-06-01 2026-06-14"], 14),
+        (utc(2026, 6, 15), ["2026-06-01 2026-06-15"], 15),
+    ],
 )
 def test_a_month_can_change_until_14_days_after_its_end(
-    fake: FakeOpenMeteo, store: RawStore, clean: Path, now: datetime, again: bool
+    fake: FakeOpenMeteo,
+    store: RawStore,
+    clean: Path,
+    now: datetime,
+    months_asked: list[str],
+    last_run: int,
 ) -> None:
     run(fake, store, clean, now=utc(2026, 6, 10, 12))
     fake.requests.clear()
     run(fake, store, clean, now=now)
-    assert ("observed 2026-05-01 2026-05-31" in asked(fake)) is again
+    assert asked(fake) == [
+        *(f"observed {month}" for month in months_asked),
+        *(f"run 2026-06-{day}T00:00" for day in range(11, last_run + 1)),
+    ]
 
 
 def test_a_response_that_differs_only_by_generationtime_ms_adds_nothing(
@@ -394,10 +416,29 @@ def test_a_response_that_differs_only_by_generationtime_ms_adds_nothing(
 ) -> None:
     run(fake, store, clean)
     kept = store.receipts("openmeteo")
+    before = weather(clean)
     caplog.set_level(logging.INFO)
     run(fake, store, clean, now=NOW + timedelta(minutes=10))
     assert store.receipts("openmeteo") == kept
     assert "openmeteo: 1 requests, 0 new responses, " in caplog.text
+    assert weather(clean).equals(before)
+
+
+def test_a_response_alike_the_kept_one_keeps_its_first_reception(
+    fake: FakeOpenMeteo, store: RawStore, clean: Path
+) -> None:
+    # Open-Meteo updates its archive four times a day: a second run the same afternoon often
+    # gets the same data back, which must not pass for data received later.
+    run(fake, store, clean)
+    kept = next(r for r in store.receipts("openmeteo") if r.request == "2026-06")
+    same = json.loads(store.read(kept)) | {"generationtime_ms": 42.0}
+    fake.bodies[month_url(date(2026, 6, 1), date(2026, 6, 20))] = json.dumps(same).encode()
+    receipts = store.receipts("openmeteo")
+    run(fake, store, clean, now=NOW + timedelta(hours=3))
+    assert store.receipts("openmeteo") == receipts
+    observed = weather(clean).filter(pl.col("kind") == OBSERVED)
+    assert observed["time"].max() == utc(2026, 6, 20, 13)
+    assert observed["received_at"].unique().to_list() == [NOW]
 
 
 def test_a_revision_of_the_archive_is_kept_and_used(
@@ -454,7 +495,51 @@ def test_a_missing_run_is_an_error_and_is_asked_again(
     assert run(fake, store, clean).errors == ["run 2026-06-12T00:00: missing"]
     fake.requests.clear()
     run(fake, store, clean, now=LATER)
-    assert "run 2026-06-12T00:00" in asked(fake)
+    assert asked(fake) == [
+        "observed 2026-06-01 2026-06-21",
+        "run 2026-06-12T00:00",
+        "run 2026-06-21T00:00",
+    ]
+
+
+def test_a_known_gap_is_no_error_and_only_full_asks_for_it_again(
+    fake: FakeOpenMeteo, store: RawStore, clean: Path
+) -> None:
+    fake.missing_runs.add(date(2026, 6, 12))
+    fake.gaps.add((FORECAST, "wind_speed_10m", utc(2026, 6, 13, 5)))
+    assert len(run(fake, store, clean).errors) == 2
+    # Listed in ADR 025, the two runs are no longer asked for, nor errors.
+    known = frozenset({"2026-06-12T00:00", "2026-06-13T00:00"})
+    fake.requests.clear()
+    assert run(fake, store, clean, now=LATER, known_gaps=known) == Report()
+    assert asked(fake) == ["observed 2026-06-01 2026-06-21", "run 2026-06-21T00:00"]
+    # What the incomplete run has stays in the clean table.
+    frame = weather(clean)
+    assert value(frame, "temperature_c", utc(2026, 6, 13, 5), run=utc(2026, 6, 13)) == 13.0
+    # Once Open-Meteo has them whole, --full sees it, and the list must change.
+    fake.missing_runs.clear()
+    fake.gaps.clear()
+    report = run(fake, store, clean, now=LATER + HOUR, full=True, known_gaps=known)
+    assert report.warnings == [
+        "run 2026-06-12T00:00: whole again, to take off the known gaps of ADR 025",
+        "run 2026-06-13T00:00: whole again, to take off the known gaps of ADR 025",
+    ]
+
+
+def test_the_known_gaps_are_those_found_on_27_september_2026() -> None:
+    assert (
+        frozenset(
+            {
+                "2025-08-05T00:00",
+                "2025-08-06T00:00",
+                "2025-08-07T00:00",
+                "2025-08-08T00:00",
+                "2025-08-09T00:00",
+                "2026-06-23T00:00",
+            }
+        )
+        == KNOWN_GAPS
+    )
 
 
 def test_a_run_with_missing_values_is_an_error_and_is_asked_again(
@@ -495,6 +580,8 @@ def test_full_asks_for_every_month_and_every_run_again(
     fake.requests.clear()
     run(fake, store, clean, full=True)
     assert asked(fake) == FIRST_ASKED
+    # Each response comes back with its keys in the other order: none is new.
+    assert len(store.receipts("openmeteo")) == len(FIRST_ASKED)
 
 
 def test_the_requests_are_spaced_out(fake: FakeOpenMeteo, store: RawStore, clean: Path) -> None:
@@ -510,7 +597,11 @@ def test_a_faulty_response_is_an_error_and_the_run_goes_on(
     fake.bodies[april] = b"[]"
     report = run(fake, store, clean)
     assert report.errors[0] == f"{april}: not an object"
+    # A Paris day that straddles two UTC months keeps the hours of the other one.
+    assert len(report.errors) == 1 + 6 * 31
+    assert "observed temperature_c 2026-04-01: 22 of 24 hours missing" in report.errors
     assert "observed temperature_c 2026-04-10: 24 of 24 hours missing" in report.errors
+    assert "observed temperature_c 2026-05-01: 2 of 24 hours missing" in report.errors
     assert asked(fake) == FIRST_ASKED
     assert value(weather(clean), "temperature_c", utc(2026, 5, 19, 12)) == 16.0
 
@@ -527,9 +618,14 @@ def test_a_faulty_response_falls_back_on_the_last_readable_one(
         "observed 2026-06: the response received at 2026-06-20 13:00:00 UTC is used, "
         "the later ones are unusable"
     ]
-    # The older response keeps its values up to its own reception.
+    # The older response keeps its values up to its own reception: the rest of the day before
+    # is missing.
+    assert report.errors[1:] == [
+        f"observed {name} 2026-06-20: 8 of 24 hours missing" for name in NAMES
+    ]
     observed = weather(clean).filter(pl.col("kind") == OBSERVED)
     assert observed["time"].max() == utc(2026, 6, 20, 13)
+    assert observed["received_at"].unique().to_list() == [NOW]
 
 
 def test_an_old_month_whose_last_response_is_faulty_is_asked_again(
@@ -559,6 +655,10 @@ def test_a_damaged_file_of_an_old_month_is_fetched_again(
     # The damaged file stays beside the new response, until a backup brings it back.
     assert len(report.errors) == 1
     assert report.errors[0].startswith(f"raw layer: {april.path}: ")
+    assert len([r for r in store.receipts("openmeteo") if r.request == "2026-04"]) == 2
+    fake.requests.clear()
+    run(fake, store, clean, now=LATER + timedelta(days=1))
+    assert "observed 2026-04-01 2026-04-30" not in asked(fake)
 
 
 def test_an_error_of_the_archive_stops_the_run(
@@ -805,6 +905,28 @@ def test_the_checks_want_every_run_up_to_yesterday_whole(store: RawStore) -> Non
     ]
     assert report.invalid == [
         "2026-06-13 23:30:00 UTC: run 2026-06-12T00:00 wind_speed_m_s not on the hour"
+    ]
+
+
+def test_hours_outside_a_run_hide_no_missing_hour(store: RawStore) -> None:
+    # A radiation at the launch hour, or a temperature 48 hours after it, is not one of the
+    # hours the run should have: it cannot stand for a missing one.
+    launch = utc(2026, 6, 12)
+    rows = whole_run(date(2026, 6, 12))
+    rows.append((launch, "global_w_m2", 0.0, FORECAST, launch))
+    rows.remove((launch + 5 * HOUR, "global_w_m2", 1.0, FORECAST, launch))
+    rows.append((launch + 48 * HOUR, "temperature_c", 1.0, FORECAST, launch))
+    rows.remove((launch + 5 * HOUR, "temperature_c", 1.0, FORECAST, launch))
+    report = check(
+        frame(rows),
+        store,
+        since=date(2026, 6, 13),
+        first_run=date(2026, 6, 12),
+        now=utc(2026, 6, 13, 10),
+    )
+    assert report.errors == [
+        "run 2026-06-12T00:00 temperature_c: 1 of 48 hours missing",
+        "run 2026-06-12T00:00 global_w_m2: 1 of 47 hours missing",
     ]
 
 

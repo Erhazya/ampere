@@ -43,6 +43,7 @@ SINCE = date(2023, 7, 1)
 # The first 00 UTC run of ECMWF IFS that Open-Meteo keeps (ADR 007).
 FIRST_RUN = date(2024, 3, 14)
 HOUR = timedelta(hours=1)
+ZERO = timedelta(0)
 # A run is asked for two days: 48 hours from its launch.
 RUN_HOURS = 48
 # A month can change until this long after its end, as with the other sources.
@@ -55,6 +56,20 @@ MAX_BYTES = 1_000_000
 LATE_FROM = 12
 # What Open-Meteo says, with a 400, of a run it does not have, or not yet.
 NOT_AVAILABLE = "The requested model run is not available"
+# The runs Open-Meteo lacked, whole or in part, on 27 September 2026 (ADR 025): in August 2025,
+# the 5th, 6th, 8th and 9th are absent, and the 7th has no temperature, global or diffuse
+# radiation; on 23 June 2026, only the global radiation is there. They are no errors, and only
+# --full asks for them again.
+KNOWN_GAPS = frozenset(
+    {
+        "2025-08-05T00:00",
+        "2025-08-06T00:00",
+        "2025-08-07T00:00",
+        "2025-08-08T00:00",
+        "2025-08-09T00:00",
+        "2026-06-23T00:00",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -184,12 +199,13 @@ def ingest(
     now: datetime,
     since: date = SINCE,
     first_run: date = FIRST_RUN,
+    known_gaps: frozenset[str] = KNOWN_GAPS,
     full: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Report:
     """Fetch the months that can still change, and the months and runs the raw layer does not
-    hold whole and readable, everything if full; then rebuild the clean weather, check it, and
-    replace the clean file if its rows are valid."""
+    hold whole and readable but for the known gaps, everything if full; then rebuild the clean
+    weather, check it, and replace the clean file if its rows are valid."""
     kept = len(store.receipts(SOURCE))
     today = now.astimezone(UTC).date()
     history = responses(store)
@@ -229,7 +245,10 @@ def ingest(
 
     for request in [*months(day_bounds(since)[0].date(), today), *runs(first_run, today)]:
         held = readable(store, history.get((request.kind, request.name), []), request)
-        if full or held is None or not held.last or not settled(held, request, now):
+        if full or (
+            request.name not in known_gaps
+            and (held is None or not held.last or not settled(held, request, now))
+        ):
             fetched = ask(request)
             if fetched is not None:
                 content, receipt = fetched
@@ -255,7 +274,7 @@ def ingest(
         len(store.receipts(SOURCE)) - kept,
         weather.height,
     )
-    report = check(weather, store, since=since, first_run=first_run, now=now)
+    report = check(weather, store, since=since, first_run=first_run, now=now, known_gaps=known_gaps)
     report.errors[:0] = errors
     report.warnings[:0] = warnings
     path = clean / SOURCE / "weather.parquet"
@@ -432,19 +451,31 @@ def microseconds(moment: datetime) -> int:
 
 
 def check(
-    weather: pl.DataFrame, store: RawStore, *, since: date, first_run: date, now: datetime
+    weather: pl.DataFrame,
+    store: RawStore,
+    *,
+    since: date,
+    first_run: date,
+    now: datetime,
+    known_gaps: frozenset[str] = KNOWN_GAPS,
 ) -> Report:
-    """Invalid rows; errors for the observed hours up to the day before and for the runs up to
-    the one of the day before; a warning when the run of the day is late."""
+    """Invalid rows; errors for the observed hours up to the day before, and for the runs up to
+    the one of the day before but for the known gaps; warnings for a known gap now whole, and
+    for the run of the day when it is late."""
     report = Report(invalid=invalid_rows(weather))
     report.errors.extend(missing_hours(weather, since, now))
-    today = now.astimezone(UTC).date()
-    report.errors.extend(missing_runs(weather, runs(first_run, today - timedelta(days=1))))
-    if now.astimezone(UTC).hour >= LATE_FROM and today >= first_run:
-        report.warnings.extend(
-            f"{problem} at {now.astimezone(UTC):%H:%M} UTC"
-            for problem in missing_runs(weather, runs(today, today))
-        )
+    moment = now.astimezone(UTC)
+    for request, lacks in run_problems(weather, runs(first_run, moment.date())):
+        if request.start.date() == moment.date():
+            if moment.hour >= LATE_FROM:
+                report.warnings.extend(f"{problem} at {moment:%H:%M} UTC" for problem in lacks)
+        elif request.name in known_gaps:
+            if not lacks:
+                report.warnings.append(
+                    f"run {request.name}: whole again, to take off the known gaps of ADR 025"
+                )
+        else:
+            report.errors.extend(lacks)
     report.errors.extend(f"raw layer: {problem}" for problem in store.verify(SOURCE))
     return report
 
@@ -473,10 +504,16 @@ def missing_hours(weather: pl.DataFrame, since: date, now: datetime) -> list[str
     return errors
 
 
-def missing_runs(weather: pl.DataFrame, requests: list[Request]) -> list[str]:
-    """What each run lacks: all of it, or some hours of a variable."""
+def run_problems(weather: pl.DataFrame, requests: list[Request]) -> list[tuple[Request, list[str]]]:
+    """What each run lacks among the hours it should have: all of them, or some hours of a
+    variable; nothing when it is whole."""
+    means = [variable.name for variable in VARIABLES if variable.mean_of_hour]
+    first = pl.col("run") + pl.when(pl.col("variable").is_in(means)).then(HOUR).otherwise(ZERO)
     forecasts = weather.filter(
-        (pl.col("kind") == FORECAST) & (pl.col("time").dt.truncate("1h") == pl.col("time"))
+        (pl.col("kind") == FORECAST)
+        & (pl.col("time").dt.truncate("1h") == pl.col("time"))
+        & (pl.col("time") >= first)
+        & (pl.col("time") < pl.col("run") + RUN_HOURS * HOUR)
     )
     counts = {
         (run, name): count
@@ -490,15 +527,17 @@ def missing_runs(weather: pl.DataFrame, requests: list[Request]) -> list[str]:
     for request in requests:
         found = {variable: counts.get((request.start, variable.name), 0) for variable in VARIABLES}
         if not any(found.values()):
-            problems.append(f"run {request.name}: missing")
+            problems.append((request, [f"run {request.name}: missing"]))
             continue
+        lacks = []
         for variable, count in found.items():
             expected = len(request.expected(variable))
             if count < expected:
-                problems.append(
+                lacks.append(
                     f"run {request.name} {variable.name}: {expected - count} of {expected} hours "
                     "missing"
                 )
+        problems.append((request, lacks))
     return problems
 
 

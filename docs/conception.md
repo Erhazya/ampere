@@ -281,6 +281,7 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 - **Usage** : entrée du calcul solaire, variables de la prévision de consommation, estimation des jours récents.
 - **Piège majeur, la fuite d'information** : une prévision émise la veille à midi ne doit utiliser que des runs lancés avant midi la veille. Or `previous_day1` donne la valeur prévue 24 h avant l'heure visée : pour l'après-midi du lendemain, elle vient d'un run lancé *après* midi la veille. Il faut donc un run précis (Single Runs), ou des prévisions à 48 h. Ce choix sera tranché dans l'ADR 007.
 - **Pièges de format** : un rayonnement est la moyenne de l'heure qui finit à l'instant donné, alors que la température et le vent sont des valeurs à l'instant ; l'archive complète le jour en cours avec la prévision ; le champ `generationtime_ms` change à chaque appel, même quand les données ne changent pas.
+- **Trous** : six runs de 0 h UTC manquent, en entier ou en partie, du 5 au 9 août 2025 et le 23 juin 2026. Les prévisions des jours suivants, tous dans la période de test, n'ont pas leur run entier (ADR 025).
 - **Licence** : CC BY 4.0, source à citer : « Weather data by Open-Meteo.com ». L'API gratuite est réservée à l'usage non commercial, à moins de 10 000 appels par jour ([conditions](https://open-meteo.com/en/terms)). Une démo de portfolio sans publicité ni abonnement entre dans ce cadre.
 
 #### PVGIS
