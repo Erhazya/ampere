@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx2
 import polars as pl
 
-from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
+from ampere.data.clean import Report, instants_per_day, write_parquet
 from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, every_day, paris_day, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore
 from ampere.sources.archive import fetch_json
@@ -233,7 +233,7 @@ def check(prices: pl.DataFrame, store: RawStore, *, since: date, now: datetime) 
     today = paris_day(now)
     tomorrow = today + timedelta(days=1)
     report = Report(invalid=invalid_rows(prices, until=day_bounds(tomorrow)[1]))
-    counts = dict(quarter_hours_per_day(prices).rows())
+    counts = dict(instants_per_day(prices).rows())
     for day in every_day(since, today):
         expected, found = quarter_hours(day), counts.get(day, 0)
         if found < expected:

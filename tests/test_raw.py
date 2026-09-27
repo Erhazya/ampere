@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,7 @@ def save(
     received_at: datetime | None = RECEIVED,
     request: str = URL,
     dataset: str = "prices",
+    fingerprint: Callable[[bytes], bytes] | None = None,
 ) -> Saved:
     return store.save(
         source="smard",
@@ -38,7 +40,15 @@ def save(
         content=content,
         extension="json",
         received_at=received_at,
+        fingerprint=fingerprint,
     )
+
+
+def without_took(content: bytes) -> bytes:
+    """A fingerprint that leaves out "took", like the computing time some sources add."""
+    body = json.loads(content)
+    body.pop("took", None)
+    return json.dumps(body, sort_keys=True).encode()
 
 
 def manifest_text(store: RawStore) -> str:
@@ -113,6 +123,69 @@ def test_a_response_that_comes_back_is_kept_again(store: RawStore) -> None:
     assert len(store.receipts("smard")) == 3
 
 
+def test_a_response_with_the_same_fingerprint_adds_nothing(store: RawStore) -> None:
+    first = save(store, b'{"price": 81.5, "took": 0.2}', fingerprint=without_took).receipt
+    later = RECEIVED + timedelta(days=1)
+    again = save(store, b'{"took": 0.9, "price": 81.5}', later, fingerprint=without_took)
+    assert not again.new
+    assert again.receipt == first
+    assert store.read(first) == b'{"price": 81.5, "took": 0.2}'
+    assert len(list(store.root.rglob("*.gz"))) == 1
+
+
+def test_a_response_with_another_fingerprint_adds_a_file(store: RawStore) -> None:
+    save(store, b'{"price": 81.5, "took": 0.2}', fingerprint=without_took)
+    later = RECEIVED + timedelta(days=1)
+    revised = save(store, b'{"price": 82.0, "took": 0.2}', later, fingerprint=without_took)
+    assert revised.new
+    assert store.last("smard", "prices", URL) == revised.receipt
+
+
+def test_a_fingerprint_is_compared_with_the_last_response_only(store: RawStore) -> None:
+    # A, then B, then A with another computing time: three files, as without a fingerprint.
+    save(store, b'{"price": 1, "took": 0.1}', fingerprint=without_took)
+    save(
+        store, b'{"price": 2, "took": 0.1}', RECEIVED + timedelta(days=1), fingerprint=without_took
+    )
+    back = save(
+        store, b'{"price": 1, "took": 0.5}', RECEIVED + timedelta(days=2), fingerprint=without_took
+    )
+    assert back.new
+    assert len(store.receipts("smard")) == 3
+
+
+@pytest.mark.parametrize("damage", ["delete", "truncate"])
+def test_a_damaged_last_file_vouches_for_no_fingerprint(
+    store: RawStore, damage: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    receipt = save(store, b'{"price": 81.5, "took": 0.2}', fingerprint=without_took).receipt
+    file = store.root / receipt.path
+    if damage == "delete":
+        file.unlink()
+    else:
+        file.write_bytes(file.read_bytes()[:10])
+    later = RECEIVED + timedelta(days=1)
+    again = save(store, b'{"price": 81.5, "took": 0.9}', later, fingerprint=without_took)
+    assert again.new
+    assert store.read(again.receipt) == b'{"price": 81.5, "took": 0.9}'
+    assert f"{receipt.path}" in caplog.text
+    assert "kept beside it" in caplog.text
+
+
+def test_an_identical_response_still_repairs_its_file_with_a_fingerprint(
+    store: RawStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    receipt = save(store, b'{"price": 81.5, "took": 0.2}', fingerprint=without_took).receipt
+    (store.root / receipt.path).unlink()
+    later = RECEIVED + timedelta(days=1)
+    again = save(store, b'{"price": 81.5, "took": 0.2}', later, fingerprint=without_took)
+    assert not again.new
+    assert store.read(receipt) == b'{"price": 81.5, "took": 0.2}'
+    # The bytes are compared first: the log tells of a repair, not of a response kept beside.
+    assert "written again" in caplog.text
+    assert "kept beside it" not in caplog.text
+
+
 def test_each_request_has_its_own_history(store: RawStore) -> None:
     save(store, b"[1, 2]")
     other = save(store, b"[1, 2]", request="https://example.test/prices/2026-09-27")
@@ -159,6 +232,19 @@ def test_the_reception_time_defaults_to_now(store: RawStore) -> None:
     assert before <= receipt.received_at <= datetime.now(UTC)
 
 
+def test_the_reception_time_comes_from_the_clock_of_the_layer(tmp_path: Path) -> None:
+    # A test that plays a run at another date gives its own clock.
+    moment = datetime(2026, 6, 20, 15, 0, 5, 700_000, tzinfo=ZoneInfo("Europe/Paris"))
+    store = RawStore.create(tmp_path / "raw", clock=lambda: moment)
+    assert save(store, b"x", received_at=None).receipt.received_at == datetime(
+        2026, 6, 20, 13, 0, 5, tzinfo=UTC
+    )
+    later = RawStore(store.root, clock=lambda: moment + timedelta(hours=1))
+    assert save(later, b"y", received_at=None).receipt.received_at == datetime(
+        2026, 6, 20, 14, 0, 5, tzinfo=UTC
+    )
+
+
 def test_a_reception_time_without_a_time_zone_is_refused(store: RawStore) -> None:
     with pytest.raises(ValueError, match="time zone"):
         save(store, b"x", received_at=datetime(2026, 9, 27, 12, 30))
@@ -178,11 +264,13 @@ def test_names_cannot_leave_the_raw_folder(store: RawStore, argument: str, name:
     names = {"source": "smard", "dataset": "prices", "extension": "json"} | {argument: name}
     with pytest.raises(ValueError, match="invalid"):
         store.save(
-            **names,
+            source=names["source"],
+            dataset=names["dataset"],
             request=URL,
             url=URL,
             content_type="application/json",
             content=b"x",
+            extension=names["extension"],
             received_at=RECEIVED,
         )
 
