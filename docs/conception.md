@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée à l'étape 1 (ADR 012 à 021).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 et 2 (ADR 012 à 022).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 
@@ -430,7 +430,7 @@ Un minuteur systemd lance chaque jour à **14 h (heure de Paris)** un conteneur 
 
 Le traitement est idempotent : le relancer ne change rien. L'option `Persistent` du minuteur relance une exécution manquée dès le redémarrage du serveur. Chaque trimestre, la publication Enedis transforme les jours « estimés » en jours réels, et les jours concernés sont recalculés.
 
-### 8.4 Les données
+### 8.4 Les données *(ADR 022)*
 
 - **Trois couches** :
   - **brut**, tel que reçu, jamais modifié, avec la date de réception ;
@@ -508,6 +508,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [019](decisions/019-integration-continue.md) | Intégration continue : un workflow et deux jobs, versions fixées dans le dépôt | Acceptée |
 | [020](decisions/020-image-docker-sur-ghcr.md) | Image Docker de la démo, construite par la CI et publiée sur GHCR | Acceptée |
 | [021](decisions/021-demo-en-ligne.md) | Démo en ligne, déployée par la plateforme du socle | Acceptée |
+| [022](decisions/022-fondations-des-donnees.md) | Fondations des données : Polars, httpx2, et une couche brute faite des octets reçus | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
