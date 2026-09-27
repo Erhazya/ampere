@@ -274,6 +274,18 @@ def test_a_faulty_calendar_is_an_error_and_the_one_before_serves(
     assert table["public_holiday_received_at"].unique().to_list() == [NOW]
 
 
+def test_each_calendar_keeps_the_reception_time_of_its_response(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    # A day later, the ministry publishes a new version; the public holidays stay the same.
+    fake.school = school_export(school_rows([p for p in LYON if p[1] != "Pont de l'Ascension"]))
+    later = NOW + timedelta(days=1)
+    run(fake, store, clean, now=later)
+    received = days(clean).select("public_holiday_received_at", "school_holidays_received_at")
+    assert received.unique().rows() == [(NOW, later)]
+
+
 def test_only_the_last_faulty_response_is_an_error(
     fake: FakeCalendars, store: RawStore, clean: Path
 ) -> None:
