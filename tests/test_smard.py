@@ -1,10 +1,12 @@
 """SMARD prices, from a fake SMARD that serves an index and weekly files by URL."""
 
 import json
+import math
 import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx2
@@ -337,16 +339,41 @@ def test_a_missing_quarter_hour_is_an_error_and_stays_missing(
     )
     report = run(smard, store, clean)
     assert report.errors == ["2025-10-07: 1 of 96 quarter-hours missing"]
+    assert report.invalid == [] and report.failed
+    # The gap stays visible in the clean file, which still gets the prices received.
     assert prices(clean).height == 18 * 96 - 1
 
 
-def test_a_price_outside_the_market_limits_is_an_error(
-    smard: FakeSmard, store: RawStore, clean: Path
+def test_a_price_outside_the_market_limits_keeps_the_clean_file_as_it_was(
+    smard: FakeSmard, store: RawStore, clean: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    run(smard, store, clean)
+    before = (clean / "smard" / "prices.parquet").read_bytes()
     smard.week("quarterhour", date(2025, 10, 6), count=4 * 96, price=lambda i: 9000.0)
-    errors = run(smard, store, clean).errors
-    assert len(errors) == 4 * 96
-    assert errors[0] == "2025-10-05 22:00 UTC: 9000.0 €/MWh, outside -500 to 5000"
+    report = run(smard, store, clean)
+    assert len(report.invalid) == 4 * 96 and report.failed
+    assert report.invalid[0] == "2025-10-05 22:00 UTC: 9000.0 €/MWh, outside -500 to 5000"
+    assert (clean / "smard" / "prices.parquet").read_bytes() == before
+    assert "prices.parquet kept as it was" in caplog.text
+
+
+def test_a_failed_write_keeps_the_last_clean_file_whole(
+    smard: FakeSmard, store: RawStore, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run(smard, store, clean)
+    folder = clean / "smard"
+    before = (folder / "prices.parquet").read_bytes()
+    write = pl.DataFrame.write_parquet
+
+    def fail_halfway(frame: pl.DataFrame, file: Any, **options: Any) -> None:
+        write(frame.head(10), file, **options)
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(pl.DataFrame, "write_parquet", fail_halfway)
+    with pytest.raises(OSError, match="No space left"):
+        run(smard, store, clean)
+    assert (folder / "prices.parquet").read_bytes() == before
+    assert [file.name for file in folder.iterdir()] == ["prices.parquet"]
 
 
 @pytest.mark.parametrize(("hour", "warned"), [(15, True), (14, True), (13, False)])
@@ -449,14 +476,66 @@ def day(first: date, price: float = 50.0) -> list[tuple[datetime, float]]:
 def test_the_checks_report_duplicates_and_quarter_hours_off_the_grid(store: RawStore) -> None:
     rows = day(date(2025, 10, 7))
     moment = rows[5][0]
-    errors = check(
+    invalid = check(
         frame(*rows, (moment, 51.0), (moment + timedelta(minutes=7), 50.0)),
         store,
         since=date(2025, 10, 7),
         now=datetime(2025, 10, 7, 12, tzinfo=PARIS),
-    ).errors
-    assert f"{moment:%Y-%m-%d %H:%M} UTC: 2 prices" in errors
-    assert f"{moment + timedelta(minutes=7):%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour" in errors
+    ).invalid
+    assert f"{moment:%Y-%m-%d %H:%M} UTC: 2 prices" in invalid
+    assert (
+        f"{moment + timedelta(minutes=7):%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour" in invalid
+    )
+
+
+def test_duplicates_are_reported_in_time_order(store: RawStore) -> None:
+    rows = day(date(2025, 10, 7))
+    report = check(
+        frame(*rows, *rows[90:10:-8]),
+        store,
+        since=date(2025, 10, 7),
+        now=datetime(2025, 10, 7, 12, tzinfo=PARIS),
+    )
+    assert len(report.invalid) == 10
+    assert report.invalid == sorted(report.invalid)
+
+
+def test_an_instant_off_the_grid_does_not_hide_a_missing_quarter_hour(store: RawStore) -> None:
+    rows = day(date(2025, 10, 7))
+    moved = rows[40][0] + timedelta(minutes=7)
+    report = check(
+        frame(*rows[:40], (moved, 50.0), *rows[41:]),
+        store,
+        since=date(2025, 10, 7),
+        now=datetime(2025, 10, 7, 12, tzinfo=PARIS),
+    )
+    assert report.invalid == [f"{moved:%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour"]
+    assert report.errors == ["2025-10-07: 1 of 96 quarter-hours missing"]
+
+
+def test_a_price_after_tomorrow_is_invalid(store: RawStore) -> None:
+    # On 7 October, the market has set the prices of the 8th, not those of the 9th.
+    rows = day(date(2025, 10, 7)) + day(date(2025, 10, 8)) + day(date(2025, 10, 9))[:1]
+    report = check(
+        frame(*rows), store, since=date(2025, 10, 7), now=datetime(2025, 10, 7, 15, tzinfo=PARIS)
+    )
+    assert report.invalid == ["2025-10-08 22:00 UTC: a price after tomorrow"]
+
+
+@pytest.mark.parametrize(
+    ("price", "valid"),
+    [(-500.0, True), (5000.0, True), (-500.01, False), (5000.01, False), (math.nan, False)],
+    ids=str,
+)
+def test_the_market_limits_themselves_are_valid_prices(
+    store: RawStore, price: float, valid: bool
+) -> None:
+    rows = day(date(2025, 10, 7))
+    rows[10] = (rows[10][0], price)
+    report = check(
+        frame(*rows), store, since=date(2025, 10, 7), now=datetime(2025, 10, 7, 12, tzinfo=PARIS)
+    )
+    assert (report.invalid == []) is valid
 
 
 def test_a_duplicate_does_not_hide_a_missing_quarter_hour(store: RawStore) -> None:

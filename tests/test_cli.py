@@ -1,5 +1,6 @@
 """The `ampere` command line."""
 
+import logging
 import os
 from collections.abc import Callable
 from datetime import date
@@ -154,11 +155,20 @@ def test_ingest_needs_a_raw_layer_created_first(
     assert not (tmp_path / "unmounted").exists()
 
 
-@pytest.mark.parametrize(("errors", "status"), [([], 0), (["2025-10-07: 1 of 96 missing"], 1)])
-def test_ingest_fails_when_the_checks_find_errors(
+@pytest.mark.parametrize(
+    ("invalid", "errors", "status"),
+    [
+        ([], [], 0),
+        ([], ["2025-10-07: 1 of 96 quarter-hours missing"], 1),
+        (["2025-10-07 10:00 UTC: 2 prices"], [], 1),
+    ],
+    ids=["no problem", "a gap", "an invalid row"],
+)
+def test_ingest_fails_when_the_checks_find_problems(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    invalid: list[str],
     errors: list[str],
     status: int,
 ) -> None:
@@ -168,11 +178,15 @@ def test_ingest_fails_when_the_checks_find_errors(
 
     def ingest(http: object, store: object, clean: Path, **options: object) -> smard.Report:
         calls.append({"clean": clean, **options})
-        return smard.Report(errors=list(errors), warnings=["2025-10-09: 0 of 96 published so far"])
+        warnings = ["2025-10-09: 0 of 96 published so far"]
+        return smard.Report(invalid=list(invalid), errors=list(errors), warnings=warnings)
 
     monkeypatch.setattr(smard, "ingest", ingest)
     assert cli.main(["ingest", "smard", "--since", "2025-09-22"]) == status
     assert calls[0]["clean"] == tmp_path / "clean"
     assert calls[0]["since"] == date(2025, 9, 22)
-    assert "0 of 96 published so far" in caplog.text
-    assert all(error in caplog.text for error in errors)
+    assert ("ampere", logging.WARNING, "2025-10-09: 0 of 96 published so far") in (
+        caplog.record_tuples
+    )
+    for problem in [*invalid, *errors]:
+        assert ("ampere", logging.ERROR, problem) in caplog.record_tuples

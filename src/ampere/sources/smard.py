@@ -6,9 +6,9 @@ not hold whole. It keeps every response in the raw layer, rebuilds clean/smard/p
 the raw layer alone, and checks the result: missing quarter-hours are reported, never filled.
 """
 
+import io
 import json
 import logging
-import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -21,7 +21,7 @@ import polars as pl
 
 from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, paris_day, quarter_hours
 from ampere.data.http import get
-from ampere.data.raw import DamagedRawFile, RawStore, Receipt
+from ampere.data.raw import DamagedRawFile, RawStore, Receipt, write_atomically
 
 log = logging.getLogger(__name__)
 
@@ -59,10 +59,19 @@ class SchemaError(ValueError):
 
 @dataclass
 class Report:
-    """What the checks found: errors stop the daily job, warnings are only logged."""
+    """What the checks found.
 
+    Invalid rows break a rule of the clean file, which then stays as it was. Invalid rows and
+    errors make the run fail; warnings are only logged.
+    """
+
+    invalid: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.invalid or self.errors)
 
 
 def index_url() -> str:
@@ -111,7 +120,7 @@ def ingest(
     sleep: Callable[[float], None] = time.sleep,
 ) -> Report:
     """Fetch the weeks that can still change or that the raw layer lacks, every week if full,
-    then rebuild the clean prices and check them."""
+    then rebuild the clean prices, check them, and replace the clean file if its rows are valid."""
     weeks = parse_index(fetch(http, store, "index", index_url(), sleep), index_url())
     first = day_bounds(since)[0]
     # Each week ends where the next one starts; the last one, on the next Monday in Paris.
@@ -130,8 +139,13 @@ def ingest(
             asked += 1
             parse_series(fetch(http, store, dataset(resolution), url, sleep), url)
     prices = build(store, since=since)
-    write_parquet(prices, clean / SOURCE / "prices.parquet")
-    return check(prices, store, since=since, now=now)
+    report = check(prices, store, since=since, now=now)
+    path = clean / SOURCE / "prices.parquet"
+    if report.invalid:
+        log.error("%s kept as it was: the new prices break its rules", path)
+    else:
+        write_parquet(prices, path)
+    return report
 
 
 def settled(
@@ -232,26 +246,15 @@ def build(store: RawStore, *, since: date) -> pl.DataFrame:
 
 
 def check(prices: pl.DataFrame, store: RawStore, *, since: date, now: datetime) -> Report:
-    """Errors for the past and today; a warning when tomorrow's prices are late."""
-    report = Report()
-    for start, count in prices.group_by("start").len().filter(pl.col("len") > 1).rows():
-        report.errors.append(f"{start:%Y-%m-%d %H:%M} UTC: {count} prices")
-    off_grid = prices.filter(pl.col("start").dt.truncate("15m") != pl.col("start"))
-    report.errors.extend(
-        f"{start:%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour" for start in off_grid["start"]
-    )
-    outside = prices.filter(~pl.col("price_eur_per_mwh").is_between(LOWEST, HIGHEST))
-    for start, price in outside.select("start", "price_eur_per_mwh").rows():
-        report.errors.append(
-            f"{start:%Y-%m-%d %H:%M} UTC: {price} €/MWh, outside {LOWEST:.0f} to {HIGHEST:.0f}"
-        )
-    counts = quarter_hours_per_day(prices)
+    """Invalid rows; errors for the past and today; a warning when tomorrow's prices are late."""
     today = paris_day(now)
+    tomorrow = today + timedelta(days=1)
+    report = Report(invalid=invalid_rows(prices, until=day_bounds(tomorrow)[1]))
+    counts = quarter_hours_per_day(prices)
     for day in days(since, today):
         expected, found = quarter_hours(day), counts.get(day, 0)
         if found < expected:
             report.errors.append(f"{day}: {expected - found} of {expected} quarter-hours missing")
-    tomorrow = today + timedelta(days=1)
     if now.astimezone(PARIS).hour >= PUBLISHED_BY and counts.get(tomorrow, 0) < quarter_hours(
         tomorrow
     ):
@@ -263,10 +266,32 @@ def check(prices: pl.DataFrame, store: RawStore, *, since: date, now: datetime) 
     return report
 
 
+def invalid_rows(prices: pl.DataFrame, *, until: datetime) -> list[str]:
+    """The rows the clean file must not hold: a quarter-hour twice, an instant off the grid, a
+    price outside the market limits, or a price from `until` on, which the market has not set."""
+    duplicates = prices.group_by("start").len().filter(pl.col("len") > 1).sort("start")
+    invalid = [f"{start:%Y-%m-%d %H:%M} UTC: {count} prices" for start, count in duplicates.rows()]
+    off_grid = prices.filter(pl.col("start").dt.truncate("15m") != pl.col("start"))
+    invalid.extend(
+        f"{start:%Y-%m-%d %H:%M:%S} UTC: not on a quarter-hour" for start in off_grid["start"]
+    )
+    outside = prices.filter(~pl.col("price_eur_per_mwh").is_between(LOWEST, HIGHEST))
+    invalid.extend(
+        f"{start:%Y-%m-%d %H:%M} UTC: {price} €/MWh, outside {LOWEST:.0f} to {HIGHEST:.0f}"
+        for start, price in outside.select("start", "price_eur_per_mwh").rows()
+    )
+    ahead = prices.filter(pl.col("start") >= until)
+    invalid.extend(
+        f"{start:%Y-%m-%d %H:%M} UTC: a price after tomorrow" for start in ahead["start"]
+    )
+    return invalid
+
+
 def quarter_hours_per_day(prices: pl.DataFrame) -> dict[date, int]:
-    """How many distinct quarter-hours each Paris day has."""
+    """How many distinct quarter-hours of the grid each Paris day has."""
+    on_grid = prices.filter(pl.col("start").dt.truncate("15m") == pl.col("start"))
     per_day = (
-        prices.select(pl.col("start").unique())
+        on_grid.select(pl.col("start").unique())
         .group_by(pl.col("start").dt.convert_time_zone("Europe/Paris").dt.date().alias("day"))
         .len()
     )
@@ -282,11 +307,11 @@ def last_receipts(store: RawStore, name: str) -> Iterable[Receipt]:
 
 
 def write_parquet(frame: pl.DataFrame, path: Path) -> None:
-    """Replace a clean file in one step: a reader sees the old file or the new one, never half."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    frame.write_parquet(temporary)
-    os.replace(temporary, path)
+    """Replace a clean file whole, even across a power cut: a reader sees the old file or the new
+    one, never half of it, and a failed write leaves nothing behind."""
+    buffer = io.BytesIO()
+    frame.write_parquet(buffer)
+    write_atomically(path, buffer.getvalue())
 
 
 def days(first: date, last: date) -> Iterable[date]:

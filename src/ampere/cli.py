@@ -85,7 +85,7 @@ def init_data() -> int:
 
 
 def ingest_source(since: date | None) -> int:
-    """Ingest SMARD, the only source so far; the checks' errors make the exit status 1."""
+    """Ingest SMARD, the only source so far; invalid rows and errors make the exit status 1."""
     from ampere.data.folders import data_root
     from ampere.data.http import client
     from ampere.data.raw import RawStore
@@ -105,7 +105,12 @@ def ingest_source(since: date | None) -> int:
         )
     for warning in report.warnings:
         log.warning("%s", warning)
-    for problem in report.errors:
+    for problem in [*report.invalid, *report.errors]:
         log.error("%s", problem)
-    log.info("smard: %d errors, %d warnings", len(report.errors), len(report.warnings))
-    return 1 if report.errors else 0
+    log.info(
+        "smard: %d invalid rows, %d errors, %d warnings",
+        len(report.invalid),
+        len(report.errors),
+        len(report.warnings),
+    )
+    return 1 if report.failed else 0
