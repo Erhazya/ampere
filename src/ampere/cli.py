@@ -9,6 +9,9 @@ from ampere import __version__
 
 log = logging.getLogger("ampere")
 
+# The sources, in the order of the daily job (ADR 028).
+SOURCES = ("smard", "eco2mix", "openmeteo", "enedis", "calendars")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ampere", description=__doc__)
@@ -41,13 +44,19 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = commands.add_parser(
         "ingest", help="fetch a source into the raw layer, then rebuild and check its clean data"
     )
-    ingest.add_argument("source", choices=["smard", "eco2mix", "openmeteo", "enedis", "calendars"])
+    ingest.add_argument("source", choices=SOURCES)
     ingest.add_argument(
         "--full",
         action="store_true",
         help="ask again for the whole history since 1 July 2023, not only what can still change "
         "(about 170 requests for SMARD, 82 for éCO2mix, 970 for Open-Meteo, 80 for Enedis); "
         "the calendars are always asked for whole",
+    )
+
+    commands.add_parser(
+        "daily",
+        help="ingest every source in turn, without --full, as the online demo does every day; "
+        "a source that fails leaves the next ones their turn, and the exit status 1",
     )
     return parser
 
@@ -61,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         return init_data()
     if args.command == "ingest":
         return ingest_source(args.source, full=args.full)
+    if args.command == "daily":
+        return daily()
     if args.command == "api":
         # Imported here, so that other commands start fast.
         import uvicorn
@@ -122,3 +133,35 @@ def ingest_source(name: str, *, full: bool) -> int:
         len(report.warnings),
     )
     return 1 if report.failed else 0
+
+
+def daily() -> int:
+    """Ingest every source in turn, as the daily job of the demo does (ADR 028)."""
+    from polars.exceptions import PanicException
+
+    from ampere.data.folders import data_root
+    from ampere.data.raw import RawStore
+
+    try:
+        RawStore(data_root() / "raw")
+    except FileNotFoundError as error:
+        log.error("%s", error)
+        return 1
+    failed = []
+    for name in SOURCES:
+        try:
+            status = ingest_source(name, full=False)
+        # A bug, an unforeseen response or a panic of Polars stops one source, not the next
+        # ones: they have their own history to keep. The traceback goes to the log.
+        except (Exception, PanicException):
+            log.exception("%s: the ingestion stopped", name)
+            status = 1
+        if status:
+            failed.append(name)
+    if failed:
+        log.error(
+            "daily: %d of %d sources failed: %s", len(failed), len(SOURCES), ", ".join(failed)
+        )
+        return 1
+    log.info("daily: the %d sources are ingested", len(SOURCES))
+    return 0

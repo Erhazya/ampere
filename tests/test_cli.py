@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import ANY, Mock
 
+import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
@@ -305,3 +306,89 @@ def test_a_failed_ingestion_goes_up_instead_of_exiting_with_0(
     monkeypatch.setattr(smard, "ingest", ingest)
     with pytest.raises(SchemaError):
         cli.main(["ingest", "smard"])
+
+
+MODULES: dict[str, ModuleType] = {
+    "smard": smard,
+    "eco2mix": eco2mix,
+    "openmeteo": openmeteo,
+    "enedis": enedis,
+    "calendars": calendars,
+}
+
+
+def fake_sources(
+    monkeypatch: pytest.MonkeyPatch, outcomes: dict[str, Report | BaseException] | None = None
+) -> list[tuple[str, dict[str, object]]]:
+    """Replace the ingest() of every source with a fake that records its turn and its options,
+    then returns its report or raises its exception: a clean report unless outcomes says so."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake(name: str) -> Callable[..., Report]:
+        def ingest(http: object, store: object, clean: Path, **options: object) -> Report:
+            calls.append((name, {"clean": clean, **options}))
+            outcome = (outcomes or {}).get(name, Report())
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        return ingest
+
+    for name, module in MODULES.items():
+        monkeypatch.setattr(module, "ingest", fake(name))
+    return calls
+
+
+def test_daily_ingests_every_source_in_turn(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ampere")
+    calls = fake_sources(monkeypatch)
+    assert cli.main(["daily"]) == 0
+    assert [name for name, _ in calls] == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
+    # Each source asks only for what can still change, never for the whole history (ADR 028).
+    for _, options in calls:
+        assert options["clean"] == data / "clean" and options["full"] is False
+    assert "daily: the 5 sources are ingested" in caplog.text
+
+
+def test_daily_goes_on_after_a_source_that_fails(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls = fake_sources(
+        monkeypatch,
+        {
+            "smard": SchemaError("https://www.smard.de/app/chart_data/254/DE/x.json: no series"),
+            "openmeteo": Report(errors=["run 2026-06-12T00:00: missing"]),
+            "enedis": pl.exceptions.PanicException("index out of bounds"),
+        },
+    )
+    assert cli.main(["daily"]) == 1
+    assert [name for name, _ in calls] == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
+    # An exception, even a panic of Polars, leaves its traceback in the log.
+    stopped = [record for record in caplog.records if record.exc_info]
+    assert [record.getMessage() for record in stopped] == [
+        "smard: the ingestion stopped",
+        "enedis: the ingestion stopped",
+    ]
+    assert ("ampere", logging.ERROR, "run 2026-06-12T00:00: missing") in caplog.record_tuples
+    assert "daily: 3 of 5 sources failed: smard, openmeteo, enedis" in caplog.text
+
+
+def test_daily_stops_when_it_is_interrupted(monkeypatch: pytest.MonkeyPatch, data: Path) -> None:
+    calls = fake_sources(monkeypatch, {"eco2mix": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["daily"])
+    assert [name for name, _ in calls] == ["smard", "eco2mix"]
+
+
+def test_daily_needs_a_raw_layer_created_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
+    calls = fake_sources(monkeypatch)
+    assert cli.main(["daily"]) == 1
+    assert calls == []
+    # One message, not one per source.
+    assert caplog.text.count("check AMPERE_DATA and its volume") == 1
+    assert not (tmp_path / "unmounted").exists()
