@@ -17,8 +17,8 @@ import polars as pl
 
 from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
 from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, every_day, paris_day, quarter_hours
-from ampere.data.http import get
 from ampere.data.raw import DamagedRawFile, RawStore
+from ampere.sources.archive import fetch_json
 from ampere.sources.shapes import SchemaError, is_int, is_number, load_json
 
 log = logging.getLogger(__name__)
@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 SOURCE = "smard"
 # Filter 254, "Marktpreis: Frankreich", in the chart data of SMARD's German site.
 BASE = "https://www.smard.de/app/chart_data/254/DE"
-JSON = "application/json"
 HOUR, QUARTER = "hour", "quarterhour"
 # The start of the history: the first day of the Enedis window, shared by every source.
 SINCE = date(2023, 7, 1)
@@ -166,19 +165,9 @@ def fetch(
     http: httpx2.Client, store: RawStore, name: str, url: str, sleep: Callable[[float], None]
 ) -> bytes:
     """GET a SMARD file and keep it in the raw layer, before anything reads it."""
-    fetched = get(http, url, content_type=JSON, max_bytes=MAX_BYTES, sleep=sleep)
-    saved = store.save(
-        source=SOURCE,
-        dataset=name,
-        request=url,
-        url=fetched.url,
-        content_type=fetched.content_type,
-        content=fetched.content,
-        extension="json",
+    return fetch_json(
+        http, store, source=SOURCE, dataset=name, url=url, max_bytes=MAX_BYTES, sleep=sleep
     )
-    if saved.new:
-        log.info("%s: new response kept in %s", url, saved.receipt.path)
-    return fetched.content
 
 
 def parse_index(content: bytes, url: str) -> list[int]:
