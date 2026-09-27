@@ -274,7 +274,8 @@ def test_a_week_kept_incomplete_is_asked_again_after_its_14_days(
     store: RawStore, clean: Path
 ) -> None:
     fake = FakeSmard()
-    fake.week("quarterhour", JANUARY, count=4 * 96, price=quarterly)  # up to Thursday 8 January
+    # Up to Thursday 8 January; as on SMARD, the rest of the week is null.
+    fake.week("quarterhour", JANUARY, price=lambda i: quarterly(i) if i < 4 * 96 else None)
     wednesday = datetime(2026, 1, 7, 15, tzinfo=PARIS)
     assert run(fake, store, clean, since=JANUARY, now=wednesday).errors == []
     # The job does not run for a month; meanwhile SMARD completes the week and adds four more.
