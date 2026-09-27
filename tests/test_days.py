@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from ampere.data.days import day_bounds, paris_day, quarter_hours
+from ampere.data.days import day_bounds, every_day, paris_day, quarter_hours
 
 
 @pytest.mark.parametrize(
@@ -83,3 +83,13 @@ def test_a_day_is_a_date_not_an_instant() -> None:
         day_bounds(datetime(2026, 6, 1, 22, 30, tzinfo=UTC))
     with pytest.raises(TypeError, match="paris_day"):
         quarter_hours(datetime(2026, 6, 1, 22, 30, tzinfo=UTC))
+
+
+def test_every_day_counts_both_ends_and_nothing_backwards() -> None:
+    assert list(every_day(date(2025, 10, 30), date(2025, 11, 1))) == [
+        date(2025, 10, 30),
+        date(2025, 10, 31),
+        date(2025, 11, 1),
+    ]
+    assert list(every_day(date(2025, 11, 1), date(2025, 11, 1))) == [date(2025, 11, 1)]
+    assert list(every_day(date(2025, 11, 1), date(2025, 10, 31))) == []

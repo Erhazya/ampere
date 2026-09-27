@@ -7,21 +7,20 @@ import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx2
 import polars as pl
 import pytest
 
+from ampere.data.clean import Report
 from ampere.data.days import day_bounds, quarter_hours
 from ampere.data.http import UnexpectedResponse, client
 from ampere.data.raw import RawStore
+from ampere.sources.shapes import SchemaError
 from ampere.sources.smard import (
     QUARTER_HOURS_FROM,
     SCHEMA,
-    Report,
-    SchemaError,
     build,
     check,
     ingest,
@@ -380,25 +379,6 @@ def test_a_price_outside_the_market_limits_keeps_the_clean_file_as_it_was(
     assert report.invalid[0] == "2025-10-05 22:00 UTC: 9000.0 €/MWh, outside -500 to 5000"
     assert (clean / "smard" / "prices.parquet").read_bytes() == before
     assert "prices.parquet kept as it was" in caplog.text
-
-
-def test_a_failed_write_keeps_the_last_clean_file_whole(
-    smard: FakeSmard, store: RawStore, clean: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    run(smard, store, clean)
-    folder = clean / "smard"
-    before = (folder / "prices.parquet").read_bytes()
-    write = pl.DataFrame.write_parquet
-
-    def fail_halfway(frame: pl.DataFrame, file: Any, **options: Any) -> None:
-        write(frame.head(10), file, **options)
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(pl.DataFrame, "write_parquet", fail_halfway)
-    with pytest.raises(OSError, match="No space left"):
-        run(smard, store, clean)
-    assert (folder / "prices.parquet").read_bytes() == before
-    assert [file.name for file in folder.iterdir()] == ["prices.parquet"]
 
 
 @pytest.mark.parametrize(("hour", "warned"), [(15, True), (14, True), (13, False)])

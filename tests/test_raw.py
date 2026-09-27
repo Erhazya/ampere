@@ -55,6 +55,19 @@ def test_a_response_is_kept_as_received(store: RawStore) -> None:
     assert store.read(saved.receipt) == b'{"price": 81.5}'
 
 
+def test_latest_gives_the_last_file_of_each_request_of_a_dataset(store: RawStore) -> None:
+    first = save(store, b"[1]", request="https://example.test/a")
+    save(store, b"[2]", request="https://example.test/b")
+    save(store, b"[3]", request="https://example.test/a", dataset="index")
+    again = save(store, b"[4]", RECEIVED + timedelta(hours=1), request="https://example.test/a")
+    latest = store.latest("smard", "prices")
+    assert [receipt.request for receipt in latest] == [
+        "https://example.test/a",
+        "https://example.test/b",
+    ]
+    assert latest[0] == again.receipt != first.receipt
+
+
 def test_the_manifest_records_each_file(store: RawStore) -> None:
     receipt = save(store, b"[1, 2]").receipt
     lines = manifest_text(store).splitlines()

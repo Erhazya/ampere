@@ -5,6 +5,7 @@ sources all follow its clock. It has 96 quarter-hours, 92 when the clocks go for
 they go back.
 """
 
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -35,3 +36,8 @@ def quarter_hours(day: date) -> int:
     # In UTC, subtracting gives the time that really passed. Between two Paris times, Python
     # would give the difference on the clock, 24 hours even on a changeover day.
     return (end - start) // QUARTER_HOUR
+
+
+def every_day(first: date, last: date) -> Iterator[date]:
+    """Each day from first to last, both included; none when last comes before first."""
+    return (first + timedelta(days=n) for n in range((last - first).days + 1))

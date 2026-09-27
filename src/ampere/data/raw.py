@@ -167,6 +167,10 @@ class RawStore:
         """The latest file kept for a request, if any."""
         return self.load(source).last.get((dataset, request))
 
+    def latest(self, source: str, dataset: str) -> list[Receipt]:
+        """The latest file kept for each request of a dataset, in the order the requests came."""
+        return [receipt for (name, _), receipt in self.load(source).last.items() if name == dataset]
+
     def read(self, receipt: Receipt) -> bytes:
         """The response as received, after checking it against its SHA-256."""
         path = self.file(receipt)

@@ -6,22 +6,20 @@ not hold whole. It keeps every response in the raw layer, rebuilds clean/smard/p
 the raw layer alone, and checks the result: missing quarter-hours are reported, never filled.
 """
 
-import io
-import json
 import logging
 import time
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import httpx2
 import polars as pl
 
-from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, paris_day, quarter_hours
+from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
+from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, every_day, paris_day, quarter_hours
 from ampere.data.http import get
-from ampere.data.raw import DamagedRawFile, RawStore, Receipt, write_atomically
+from ampere.data.raw import DamagedRawFile, RawStore
+from ampere.sources.shapes import SchemaError, is_int, is_number, load_json
 
 log = logging.getLogger(__name__)
 
@@ -53,27 +51,6 @@ SCHEMA = pl.Schema(
         "received_at": pl.Datetime("us", "UTC"),
     }
 )
-
-
-class SchemaError(ValueError):
-    """A SMARD response that no longer has the shape the code expects."""
-
-
-@dataclass
-class Report:
-    """What the checks found.
-
-    Invalid rows break a rule of the clean file, which then stays as it was. Invalid rows and
-    errors make the run fail; warnings are only logged.
-    """
-
-    invalid: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-    @property
-    def failed(self) -> bool:
-        return bool(self.invalid or self.errors)
 
 
 def index_url() -> str:
@@ -206,7 +183,7 @@ def fetch(
 
 def parse_index(content: bytes, url: str) -> list[int]:
     """The starts of the weeks, in milliseconds since 1970, oldest first."""
-    data = load(content, url)
+    data = load_json(content, url)
     weeks = data.get("timestamps") if isinstance(data, dict) else None
     if not isinstance(weeks, list) or not weeks or not all(is_int(week) for week in weeks):
         raise SchemaError(f"{url}: no list of week starts")
@@ -215,7 +192,7 @@ def parse_index(content: bytes, url: str) -> list[int]:
 
 def parse_series(content: bytes, url: str) -> list[tuple[int, float | None]]:
     """The points of a weekly file: (start in milliseconds, price in €/MWh, or None if absent)."""
-    data = load(content, url)
+    data = load_json(content, url)
     meta = data.get("meta_data") if isinstance(data, dict) else None
     if not isinstance(meta, dict) or meta.get("version") != 1:
         raise SchemaError(f"{url}: meta_data version is not 1")
@@ -242,7 +219,7 @@ def build(store: RawStore, *, since: date) -> pl.DataFrame:
     first = day_bounds(since)[0]
     rows: list[tuple[datetime, float, int, datetime]] = []
     for resolution, step in ((HOUR, 60), (QUARTER, 15)):
-        for receipt in last_receipts(store, dataset(resolution)):
+        for receipt in store.latest(SOURCE, dataset(resolution)):
             for start_ms, price in parse_series(store.read(receipt), receipt.request):
                 start = moment(start_ms)
                 if price is None or (start < QUARTER_HOURS_FROM) != (resolution == HOUR):
@@ -261,8 +238,8 @@ def check(prices: pl.DataFrame, store: RawStore, *, since: date, now: datetime) 
     today = paris_day(now)
     tomorrow = today + timedelta(days=1)
     report = Report(invalid=invalid_rows(prices, until=day_bounds(tomorrow)[1]))
-    counts = quarter_hours_per_day(prices)
-    for day in days(since, today):
+    counts = dict(quarter_hours_per_day(prices).rows())
+    for day in every_day(since, today):
         expected, found = quarter_hours(day), counts.get(day, 0)
         if found < expected:
             report.errors.append(f"{day}: {expected - found} of {expected} quarter-hours missing")
@@ -296,52 +273,6 @@ def invalid_rows(prices: pl.DataFrame, *, until: datetime) -> list[str]:
         f"{start:%Y-%m-%d %H:%M} UTC: a price after tomorrow" for start in ahead["start"]
     )
     return invalid
-
-
-def quarter_hours_per_day(prices: pl.DataFrame) -> dict[date, int]:
-    """How many distinct quarter-hours of the grid each Paris day has."""
-    on_grid = prices.filter(pl.col("start").dt.truncate("15m") == pl.col("start"))
-    per_day = (
-        on_grid.select(pl.col("start").unique())
-        .group_by(pl.col("start").dt.convert_time_zone("Europe/Paris").dt.date().alias("day"))
-        .len()
-    )
-    return dict(per_day.rows())
-
-
-def last_receipts(store: RawStore, name: str) -> Iterable[Receipt]:
-    """The last response of each request of a dataset."""
-    last = {
-        receipt.request: receipt for receipt in store.receipts(SOURCE) if receipt.dataset == name
-    }
-    return last.values()
-
-
-def write_parquet(frame: pl.DataFrame, path: Path) -> None:
-    """Replace a clean file whole, even across a power cut: a reader sees the old file or the new
-    one, never half of it, and a failed write leaves nothing behind."""
-    buffer = io.BytesIO()
-    frame.write_parquet(buffer)
-    write_atomically(path, buffer.getvalue())
-
-
-def days(first: date, last: date) -> Iterable[date]:
-    return (first + timedelta(days=n) for n in range((last - first).days + 1))
-
-
-def load(content: bytes, url: str) -> Any:
-    try:
-        return json.loads(content)
-    except ValueError as error:
-        raise SchemaError(f"{url}: not JSON ({error})") from error
-
-
-def is_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def is_number(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def moment(milliseconds: int) -> datetime:
