@@ -274,6 +274,35 @@ def test_a_faulty_calendar_is_an_error_and_the_one_before_serves(
     assert table["public_holiday_received_at"].unique().to_list() == [NOW]
 
 
+def test_only_the_last_faulty_response_is_an_error(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    # Two faulty responses after a good one: the older of them is only logged.
+    run(fake, store, clean)
+    fake.holidays = b"<html>"
+    run(fake, store, clean, now=NOW + timedelta(days=1))
+    fake.holidays = b"<html><body>"
+    report = run(fake, store, clean, now=NOW + timedelta(days=2))
+    assert [error.split(" (")[0] for error in report.errors] == [f"{HOLIDAYS_URL}: not JSON"]
+    assert on(days(clean), date(2025, 11, 1)) == ("Toussaint", "Vacances de la Toussaint")
+
+
+def test_a_damaged_older_response_is_left_aside(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    run(fake, store, clean)
+    good = store.receipts("calendars")[0]
+    fake.holidays = b"<html>"
+    run(fake, store, clean, now=NOW + timedelta(days=1))
+    (store.root / good.path).write_bytes(b"damaged")
+    report = run(fake, store, clean, now=NOW + timedelta(days=2))
+    assert [error.split(" (")[0] for error in report.errors] == [
+        f"{HOLIDAYS_URL}: not JSON",
+        "public-holidays: no readable response",
+        f"raw layer: {good.path}: Not a gzipped file",
+    ]
+
+
 def test_without_a_readable_calendar_the_days_are_not_written(
     fake: FakeCalendars, store: RawStore, clean: Path
 ) -> None:
@@ -359,6 +388,7 @@ URL = "https://example.test/calendar"
     [
         (b"<html>", "not JSON"),
         (b"[]", "not an object of public holidays"),
+        (b'["2026-11-01"]', "not an object of public holidays"),
         (b"{}", "not an object of public holidays"),
         (b'{"2026-13-01": "Toussaint"}', "an unexpected public holiday"),
         (b'{"20261101": "Toussaint"}', "an unexpected public holiday"),
