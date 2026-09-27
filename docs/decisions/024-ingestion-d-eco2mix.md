@@ -78,9 +78,27 @@ RTE publie éCO2mix sous Licence Ouverte 2.0, par la plateforme ODRÉ (Open Data
    - **Avantages** : plus proche des indices.
    - **Inconvénients** : les indices disent 7 à 20 minutes, pas 15 ; au passage au temps réel, le dernier quart d'heure du consolidé n'aurait plus de valeur.
 
+### Réponse mal formée pour un mois
+
+1. **Une erreur, pas un arrêt**
+   - **Avantages** : une anomalie d'un mois ne fige ni les autres mois ni l'autre zone.
+   - **Inconvénients** : le passage va au bout avec un trou, qui est une erreur du rapport.
+2. **Arrêter le passage**
+   - **Avantages** : le plus simple et le plus visible.
+   - **Inconvénients** : une anomalie en temps réel se répète à chaque passage tant qu'elle reste dans la fenêtre de 90 jours, et fige toute la source jusqu'à trois mois.
+
+### Réponse moins complète qu'une autre réponse gardée
+
+1. **Garder la plus complète**
+   - **Avantages** : un export consolidé encore vide ou partiel, ou une réponse des périodes tronquée, ne fait rien perdre au nettoyé.
+   - **Inconvénients** : quelques fichiers de plus à lire, pour les mois qui ont une réponse dans chaque jeu.
+2. **Accepter un nettoyé dégradé pendant un passage**
+   - **Avantages** : rien à ajouter ; les erreurs sont signalées et le passage suivant répare.
+   - **Inconvénients** : le nettoyé perd pour un temps des valeurs que le brut a.
+
 ## Décision
 
-Option 1 dans les six cas. Pour la reconstruction du nettoyé, la première version de cette décision retenait l'option 2 ; la relecture de son code en a reproduit le blocage.
+Option 1 dans les huit cas. Pour la reconstruction du nettoyé, la première version de cette décision retenait l'option 2 ; la relecture de son code en a reproduit le blocage.
 
 - **Requêtes** :
   - à chaque passage, quatre requêtes demandent à ODRÉ les périodes des versions : pour chaque zone, celles du consolidé et du définitif, puis celle du temps réel. Le définitif doit remonter au 1er juillet 2023, le consolidé le suivre sans trou, et le temps réel exister : sinon, le passage s'arrête ;
@@ -89,8 +107,8 @@ Option 1 dans les six cas. Pour la reconstruction du nettoyé, la première vers
   - un mois temps réel dont le début est sorti de la fenêtre de 90 jours n'est plus redemandé, même avec `--full` : sa réponse reviendrait tronquée. La réponse gardée reste, et ses trous restent des erreurs jusqu'au consolidé ;
   - `ampere ingest eco2mix --full` redemande tous les autres mois ;
   - chaque réponse passe par `get()` (ADR 022) : du JSON, de 20 Mo au plus. Une pause de 0,5 s sépare deux requêtes. Dans le brut, la source est `eco2mix`, et les jeux `coverage`, `national-tr`, `national-cons-def`, `regional-tr` et `regional-cons-def`.
-- **Schéma** : une réponse est une liste d'objets. Chaque ligne tombe dans le mois demandé, sur la grille du quart d'heure, avec un `date_heure` en UTC, une `nature` propre à son jeu (temps réel dans `tr`, consolidée ou définitive dans `cons-def`) et des mesures numériques ou nulles ; une ligne régionale a le code 84 ; une valeur consolidée ou définitive à la demi-heure tombe sur une demi-heure. Une ligne dont l'heure de Paris n'a jamais existé est écartée, et deux lignes restantes pour un même instant arrêtent tout, comme une date ou un nombre que Python ne sait pas représenter. Le passage s'arrête alors avec l'adresse fautive, la réponse reste dans le brut, et le passage suivant la redemande.
-- **Nettoyé** : `clean/eco2mix/measures.parquet`, reconstruit en entier à chaque passage, mois par mois : chaque mois vient de la dernière réponse du jeu choisi pour lui. Les réponses plus anciennes restent dans le brut, sans être relues. Une ligne par zone, mesure et quart d'heure :
+- **Schéma** : une réponse est une liste d'objets. Chaque ligne tombe dans le mois demandé, sur la grille du quart d'heure, avec un `date_heure` en UTC, une `nature` propre à son jeu (temps réel dans `tr`, consolidée ou définitive dans `cons-def`) et des mesures numériques ou nulles ; une ligne régionale a le code 84 ; une valeur consolidée ou définitive à la demi-heure tombe sur une demi-heure. Une ligne dont l'heure de Paris n'a jamais existé est écartée ; deux lignes restantes pour un même instant, ou une date ou un nombre que Python ne sait pas représenter, rendent la réponse fautive. Une réponse mensuelle fautive devient une erreur du rapport, avec son adresse : le passage continue avec la réponse gardée de ce mois si elle se lit, sinon sans ce mois. La réponse reste dans le brut, et le passage suivant la redemande. Une réponse de périodes fautive arrête le passage, puisque sans elle aucun mois ne peut choisir son jeu.
+- **Nettoyé** : `clean/eco2mix/measures.parquet`, reconstruit en entier à chaque passage, mois par mois : chaque mois vient de la dernière réponse du jeu choisi pour lui, sauf si la dernière réponse gardée de l'autre jeu couvre plus de quarts d'heure ; à couverture égale, la version la plus avancée l'emporte, et un avertissement signale ce repli. Les réponses plus anciennes restent dans le brut, sans être relues. Une ligne par zone, mesure et quart d'heure :
   - `start` : le début du quart d'heure, en UTC ;
   - `area` : `FR` ou `ARA` ;
   - `measure` : `consumption_mw`, `co2_g_per_kwh` et `rte_forecast_mw` pour la France, `solar_mw` et `solar_load_factor_pct` pour la région ;
@@ -109,6 +127,7 @@ Option 1 dans les six cas. Pour la reconstruction du nettoyé, la première vers
 - Le premier passage fait 82 requêtes, en deux minutes environ ; les suivants, 4 pour les périodes des versions, puis le mois en cours et, jusqu'au 14, le précédent, pour chaque zone, et le mois suivant le dernier jour du mois : 6 à 10 requêtes. Le 27 septembre 2026, le brut d'éCO2mix pesait 11 Mo, et le nettoyé 568 700 valeurs en 2,6 Mo.
 - Chaque passage lit une fois chaque mois gardé, pour savoir s'il est acquis, et en reconstruit le nettoyé sans le relire : 15 s pour un passage sans réponse nouvelle, le 27 septembre 2026, contre 25 s dans la première version. Une lecture en colonnes deviendra nécessaire avec Enedis, près de dix fois plus volumineux.
 - Entre la sortie d'un mois de la fenêtre du temps réel et la publication de son consolidé, ce mois ne change plus chez nous.
+- Un fichier brut abîmé que plus aucune requête ne redemande, comme la réponse temps réel d'un mois devenu consolidé, ne bloque pas le nettoyé, mais `verify()` le signale à chaque passage, qui sort en erreur. Seule une restauration depuis une sauvegarde le répare : la procédure viendra avec les sauvegardes des données, en 2.7.
 - La simulation devra traiter les 4 quarts d'heure qu'ODRÉ ne donne pas au retour à l'heure d'hiver, par une règle écrite, et non les combler en silence.
 - À la publication d'un trimestre consolidé, ses trois mois sont redemandés une fois ; à celle d'une année définitive, ses douze mois.
 - Le taux de charge peut dépasser 100 % si la puissance installée connue de RTE est en retard sur le parc : il est accepté jusqu'à 150 %.
