@@ -38,6 +38,26 @@ def quarter_hours(day: date) -> int:
     return (end - start) // QUARTER_HOUR
 
 
+def never_happened(local: datetime) -> bool:
+    """Whether a Paris wall-clock time never happened: 02:00 to 02:59 when the clocks go forward.
+
+    Such a time has no instant of its own: Python gives it the offset of the hour before, so that
+    02:30 becomes 01:30 UTC, which is 03:30 on the Paris clocks.
+    """
+    if local.tzinfo is not None:
+        raise TypeError("a wall-clock time has no time zone: give the date and hour as read")
+    return (
+        local.replace(tzinfo=PARIS).astimezone(UTC).astimezone(PARIS).replace(tzinfo=None) != local
+    )
+
+
+def first_pass(instant: datetime) -> bool:
+    """Whether an instant falls in the first pass of the Paris hour lived twice: 02:00 to 02:59,
+    summer time, on the day the clocks go back."""
+    local = instant.astimezone(PARIS)
+    return local.fold == 0 and local.replace(fold=1).utcoffset() != local.utcoffset()
+
+
 def every_day(first: date, last: date) -> Iterator[date]:
     """Each day from first to last, both included; none when last comes before first."""
     return (first + timedelta(days=n) for n in range((last - first).days + 1))

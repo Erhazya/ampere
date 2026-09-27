@@ -13,15 +13,18 @@ import polars as pl
 import pytest
 
 from ampere.data.clean import Report
-from ampere.data.days import day_bounds, quarter_hours
+from ampere.data.days import day_bounds, first_pass, quarter_hours
 from ampere.data.http import client
 from ampere.data.raw import RawStore
 from ampere.sources.eco2mix import (
     AUVERGNE_RHONE_ALPES,
     FRANCE,
     SCHEMA,
+    Month,
+    MonthFile,
     best_version,
     check,
+    complete,
     coverage_url,
     ingest,
     month_url,
@@ -133,8 +136,11 @@ class FakeOdre:
         while moment < min(end, last if real_time else end):
             version = self.version(moment)
             if (version == "real_time") == real_time:
+                local = moment.astimezone(PARIS).isoformat()
                 row: dict[str, object] = {
                     "nature": NATURES[version],
+                    "date": local[:10],
+                    "heure": local[11:16],
                     "date_heure": moment.isoformat(),
                 }
                 if level == "regional":
@@ -467,6 +473,8 @@ def month_body(rows: list[object]) -> bytes:
 
 ROW: dict[str, object] = {
     "nature": "Données définitives",
+    "date": "2026-04-10",
+    "heure": "07:00",
     "date_heure": "2026-04-10T05:00:00+00:00",
     "consommation": 50_700,
     "taux_co2": 27,
@@ -489,7 +497,7 @@ ROW: dict[str, object] = {
         (month_body([{**ROW, "date_heure": "2026-04-10T05:07:00+00:00"}]), "off the quarter-hour"),
         # A consolidated or definitive consumption between two half-hours: the step has changed.
         (
-            month_body([{**ROW, "date_heure": "2026-04-10T05:15:00+00:00"}]),
+            month_body([{**ROW, "date_heure": "2026-04-10T05:15:00+00:00", "heure": "07:15"}]),
             "between two half-hours",
         ),
     ],
@@ -498,6 +506,24 @@ def test_a_month_must_keep_its_known_shape(body: bytes, message: str) -> None:
     with pytest.raises(SchemaError, match=re.escape("https://example.test/month")) as error:
         parse_month(body, "https://example.test/month", FRANCE, "cons-def")
     assert message in str(error.value)
+
+
+@pytest.mark.parametrize("ghost_first", [False, True], ids=["after", "before"])
+def test_the_hour_that_never_happened_is_left_out(ghost_first: bool) -> None:
+    # 31 March 2024: ODRÉ gives 02:00 to 02:45, which never happened, the instants of 03:00 and on.
+    real = {
+        **ROW,
+        "date": "2024-03-31",
+        "heure": "03:00",
+        "date_heure": "2024-03-31T01:00:00+00:00",
+    }
+    rows: list[object] = [
+        {**real, "prevision_j1": 46_646},
+        {**real, "heure": "02:00", "prevision_j1": 46_423},
+    ]
+    body = month_body(list(reversed(rows)) if ghost_first else rows)
+    month = parse_month(body, "https://example.test/month", FRANCE, "cons-def")
+    assert month.values["rte_forecast_mw"] == [(paris(2024, 3, 31, 3), 46_646.0, "definitive")]
 
 
 def test_a_regional_month_holds_only_its_region() -> None:
@@ -562,15 +588,37 @@ def whole_days(first: date, last: date) -> list[tuple[datetime, str, str, float,
 def test_the_checks_count_each_measure_until_yesterday_with_the_clock_changes(
     store: RawStore,
 ) -> None:
-    # 25 October 2026 has 100 quarter-hours; the 26th is today, not checked yet.
+    # 25 October 2026 has 100 quarter-hours, but ODRÉ never gives the first pass of 02:00 to 02:59:
+    # 96 are expected. The 26th is today, not checked yet.
     rows = [
         row
         for row in whole_days(date(2026, 10, 24), date(2026, 10, 25))
-        if not (row[2] == "solar_mw" and row[0] == paris(2026, 10, 25, 2))
+        if not first_pass(row[0])
+        and not (row[2] == "solar_mw" and row[0] == paris(2026, 10, 25, 12))
     ]
     now = datetime(2026, 10, 26, 3, tzinfo=PARIS)
     report = check(frame(rows), store, since=date(2026, 10, 24), now=now)
-    assert report.errors == ["ARA solar_mw 2026-10-25: 1 of 100 quarter-hours missing"]
+    assert report.errors == ["ARA solar_mw 2026-10-25: 1 of 96 quarter-hours missing"]
+
+
+def test_an_autumn_month_is_whole_without_the_first_pass_of_the_hour_lived_twice() -> None:
+    october = MonthFile(FRANCE, "cons-def", paris(2026, 10, 1), paris(2026, 11, 1))
+
+    def values(step: timedelta) -> list[tuple[datetime, float, str]]:
+        instants = (october.start + i * step for i in range((october.end - october.start) // step))
+        return [(moment, 50_000.0, "definitive") for moment in instants if not first_pass(moment)]
+
+    month = Month(
+        {
+            "consumption_mw": values(HALF),
+            "co2_g_per_kwh": values(HALF),
+            "rte_forecast_mw": values(QUARTER),
+        },
+        {"definitive"},
+    )
+    assert complete(month, october)
+    month.values["co2_g_per_kwh"].pop(100)
+    assert not complete(month, october)
 
 
 @pytest.mark.parametrize(

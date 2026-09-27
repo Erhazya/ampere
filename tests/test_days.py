@@ -4,7 +4,14 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from ampere.data.days import day_bounds, every_day, paris_day, quarter_hours
+from ampere.data.days import (
+    day_bounds,
+    every_day,
+    first_pass,
+    never_happened,
+    paris_day,
+    quarter_hours,
+)
 
 
 @pytest.mark.parametrize(
@@ -93,3 +100,38 @@ def test_every_day_counts_both_ends_and_nothing_backwards() -> None:
     ]
     assert list(every_day(date(2025, 11, 1), date(2025, 11, 1))) == [date(2025, 11, 1)]
     assert list(every_day(date(2025, 11, 1), date(2025, 10, 31))) == []
+
+
+@pytest.mark.parametrize(
+    ("local", "never"),
+    [
+        (datetime(2024, 3, 31, 2, 0), True),  # the clocks go from 02:00 to 03:00
+        (datetime(2024, 3, 31, 2, 45), True),
+        (datetime(2024, 3, 31, 3, 0), False),
+        (datetime(2024, 3, 31, 1, 45), False),
+        (datetime(2024, 10, 27, 2, 30), False),  # it happens twice, but it happens
+        (datetime(2024, 6, 1, 2, 0), False),
+    ],
+)
+def test_the_hour_skipped_in_spring_never_happened_in_paris(local: datetime, never: bool) -> None:
+    assert never_happened(local) is never
+
+
+def test_never_happened_takes_a_wall_clock_time() -> None:
+    with pytest.raises(TypeError, match="wall-clock"):
+        never_happened(datetime(2024, 3, 31, 2, tzinfo=UTC))
+
+
+@pytest.mark.parametrize(
+    ("instant", "first"),
+    [
+        (datetime(2023, 10, 29, 0, 0, tzinfo=UTC), True),  # 02:00 in Paris, summer time
+        (datetime(2023, 10, 29, 0, 45, tzinfo=UTC), True),
+        (datetime(2023, 10, 29, 1, 0, tzinfo=UTC), False),  # 02:00 again, winter time
+        (datetime(2023, 10, 28, 23, 45, tzinfo=UTC), False),
+        (datetime(2024, 3, 31, 1, 0, tzinfo=UTC), False),
+        (datetime(2024, 6, 1, 0, 30, tzinfo=UTC), False),
+    ],
+)
+def test_the_first_pass_of_the_hour_lived_twice_is_found(instant: datetime, first: bool) -> None:
+    assert first_pass(instant) is first

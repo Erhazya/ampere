@@ -14,13 +14,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx2
 import polars as pl
 
 from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
-from ampere.data.days import QUARTER_HOUR, day_bounds, every_day, paris_day, quarter_hours
+from ampere.data.days import (
+    QUARTER_HOUR,
+    day_bounds,
+    every_day,
+    first_pass,
+    never_happened,
+    paris_day,
+)
 from ampere.data.raw import DamagedRawFile, RawStore
 from ampere.sources.archive import fetch_json
 from ampere.sources.shapes import SchemaError, is_number, load_json
@@ -265,13 +273,20 @@ def settled(store: RawStore, file: MonthFile, best: str, now: datetime) -> bool:
 
 
 def complete(month: Month, file: MonthFile) -> bool:
-    """Whether a monthly response has a value for every instant of its month, at its step."""
+    """Whether a monthly response has a value for every instant ODRÉ gives, at its step."""
     for measure in file.area.measures:
         step = QUARTER_HOUR if file.kind == TR else measure.settled_step
-        expected = {file.start + i * step for i in range((file.end - file.start) // step)}
+        expected = published(file.start, file.end, step)
         if not expected <= {start for start, _, _ in month.values[measure.name]}:
             return False
     return True
+
+
+def published(start: datetime, end: datetime, step: timedelta) -> set[datetime]:
+    """The instants ODRÉ gives between two instants: every step, but for the first pass of the
+    hour lived twice when the clocks go back, since it counts that hour only once."""
+    instants = (start + i * step for i in range((end - start) // step))
+    return {moment for moment in instants if not first_pass(moment)}
 
 
 def parse_coverage(content: bytes, url: str) -> dict[str, tuple[datetime, datetime]]:
@@ -298,24 +313,31 @@ def parse_month(content: bytes, url: str, area: Area, kind: str) -> Month:
     rows = load_json(content, url)
     if not isinstance(rows, list):
         raise SchemaError(f"{url}: not a list of rows")
-    month = Month({measure.name: [] for measure in area.measures})
-    # Per measure: its field, where its values go, and the minutes its instants must divide.
-    measures = [
-        (measure.field, month.values[measure.name], step_minutes(measure, kind))
-        for measure in area.measures
-    ]
-    seen: set[datetime] = set()
+    by_instant: dict[datetime, dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):
             raise SchemaError(f"{url}: a row that is not an object: {row!r}")
         if area.region is not None and row.get("code_insee_region") != area.region:
             raise SchemaError(f"{url}: a row of region {row.get('code_insee_region')!r}")
         start = instant(row.get("date_heure"), url, "date_heure")
-        if start in seen:
-            raise SchemaError(f"{url}: two rows for {start:%Y-%m-%d %H:%M} UTC")
-        seen.add(start)
         if start.minute % 15 or start.second or start.microsecond:
             raise SchemaError(f"{url}: {start:%Y-%m-%d %H:%M:%S} UTC is off the quarter-hour grid")
+        other = by_instant.setdefault(start, row)
+        if other is row:
+            continue
+        # When the clocks go forward, ODRÉ also gives 02:00 to 02:45, which never happened, the
+        # instants of 03:00 to 03:45: the same measures, and a forecast only repeated.
+        if phantom(other):
+            by_instant[start] = row
+        elif not phantom(row):
+            raise SchemaError(f"{url}: two rows for {start:%Y-%m-%d %H:%M} UTC")
+    month = Month({measure.name: [] for measure in area.measures})
+    # Per measure: its field, where its values go, and the minutes its instants must divide.
+    measures = [
+        (measure.field, month.values[measure.name], step_minutes(measure, kind))
+        for measure in area.measures
+    ]
+    for start, row in by_instant.items():
         nature = row.get("nature")
         version = NATURES.get(nature) if isinstance(nature, str) else None
         if version is None:
@@ -333,6 +355,15 @@ def parse_month(content: bytes, url: str, area: Area, kind: str) -> Month:
                 )
             values.append((start, float(value), version))
     return month
+
+
+def phantom(row: dict[str, Any]) -> bool:
+    """Whether a row stands for a Paris hour that never happened."""
+    try:
+        local = datetime.strptime(f"{row.get('date')} {row.get('heure')}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return False
+    return never_happened(local)
 
 
 def build(store: RawStore, *, since: date) -> pl.DataFrame:
@@ -391,11 +422,14 @@ def check(measures: pl.DataFrame, store: RawStore, *, since: date, now: datetime
         (area, name, day): count
         for area, name, day, count in quarter_hours_per_day(measures, by=["area", "measure"]).rows()
     }
-    yesterday = paris_day(now) - timedelta(days=1)
+    days = {
+        day: len(published(*day_bounds(day), QUARTER_HOUR))
+        for day in every_day(since, paris_day(now) - timedelta(days=1))
+    }
     for area in AREAS:
         for measure in area.measures:
-            for day in every_day(since, yesterday):
-                expected, found = quarter_hours(day), counts.get((area.name, measure.name, day), 0)
+            for day, expected in days.items():
+                found = counts.get((area.name, measure.name, day), 0)
                 if found < expected:
                     report.errors.append(
                         f"{area.name} {measure.name} {day}: {expected - found} of {expected} "
