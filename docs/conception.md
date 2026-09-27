@@ -437,7 +437,7 @@ Le traitement est idempotent : le relancer ne change rien. L'option `Persistent`
 
 - **Trois couches** :
   - **brut**, tel que reçu, jamais modifié, avec la date de réception ;
-  - **nettoyé**, validé, en UTC, au pas de 15 min, avec des unités harmonisées ; seule la météo reste au pas horaire, comme publiée (ADR 025) ;
+  - **nettoyé**, validé, en UTC, au pas de 15 min, avec des unités harmonisées ; la météo reste au pas horaire et les courbes d'Enedis à la demi-heure, comme publiées (ADR 025 et 026) ;
   - **résultats** : simulations, prévisions, indicateurs.
 - **Stockage** : fichiers Parquet, interrogés en SQL avec DuckDB (par l'API, et plus tard par l'assistant).
 - **Volume** : environ 200 maisons × 96 pas × 365 jours × 3 ans, soit une vingtaine de millions de lignes par grandeur simulée. On attend de l'ordre du gigaoctet ; la mesure réelle sera faite à l'étape 3.

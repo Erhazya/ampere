@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 025).
+> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 026).
 
 ## Énergie et marché de l'électricité
 
@@ -34,7 +34,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Prix spot (marché de la veille)** : prix de l'électricité fixé chaque jour vers 13 h par une enchère européenne, pour chaque quart d'heure du lendemain (pour chaque heure avant octobre 2025). Il varie fortement selon l'heure, la saison et la météo, et peut devenir négatif quand la production dépasse largement la demande.
 
-**Profil et puissance souscrite (Enedis)** : Enedis classe les foyers par profil de consommation (par exemple tarif base, ou heures pleines et heures creuses) et par puissance souscrite, c'est-à-dire la puissance maximale autorisée par le contrat (de 3 à 36 kVA). Une puissance élevée signale souvent un grand logement ou un chauffage électrique.
+**Profil et puissance souscrite (Enedis)** : Enedis classe les foyers par profil de consommation (par exemple tarif base, ou heures pleines et heures creuses) et par puissance souscrite, c'est-à-dire la puissance maximale autorisée par le contrat (de 3 à 36 kVA). Une puissance élevée signale souvent un grand logement ou un chauffage électrique. Pour chaque segment, Enedis publie le nombre de sites, leur énergie totale, et la courbe moyenne des seuls sites à compteur communicant, avec la part des sites qu'elle représente (ADR 026).
 
 **Rayonnement solaire (global, direct, diffus, direct normal)** : puissance du soleil reçue par mètre carré, en W/m². Le rayonnement global, reçu par un plan horizontal, est la somme du direct, venu du disque du soleil, et du diffus, renvoyé par le ciel et les nuages. Le direct normal est celui que reçoit un plan tourné face au soleil. En anglais, ce sont GHI, DHI et DNI : à partir des trois, pvlib calcule ce que reçoit un toit selon son inclinaison et son orientation. Chez Open-Meteo, une valeur horaire est la moyenne de l'heure qui finit à l'instant donné (ADR 025).
 
@@ -96,7 +96,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CORS (*Cross-Origin Resource Sharing*)** : autorisation qu'un serveur donne à une page venue d'une autre origine pour lire ses réponses. Sans elle, le navigateur bloque cette lecture. Le tableau de bord n'en a pas besoin, puisqu'il appelle l'API sur sa propre origine (ADR 016).
 
-**Couches de données** : les trois états d'une donnée dans le projet. Le brut garde chaque réponse d'une source telle que reçue ; le nettoyé la met en UTC, au pas de 15 min (la météo reste au pas horaire, comme publiée) et dans des unités communes ; les résultats viennent des simulations et des prévisions. Seul le brut ne se reconstruit pas : il est la seule copie de ce que les sources ont envoyé (ADR 022).
+**Couches de données** : les trois états d'une donnée dans le projet. Le brut garde chaque réponse d'une source telle que reçue ; le nettoyé la met en UTC, au pas de 15 min (la météo et les courbes d'Enedis restent au pas publié) et dans des unités communes ; les résultats viennent des simulations et des prévisions. Seul le brut ne se reconstruit pas : il est la seule copie de ce que les sources ont envoyé (ADR 022).
 
 **CSP** (*Content Security Policy*) : en-tête HTTP qui dit au navigateur d'où une page peut charger ses scripts, ses styles, ses polices et ses images. En ligne, le tableau de bord n'a droit qu'aux fichiers de son propre site : un script venu d'ailleurs ne s'exécuterait pas (ADR 021).
 
@@ -162,7 +162,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Polars** : bibliothèque de tableaux de données écrite en Rust, rapide et stricte sur les types, notamment les dates avec leur fuseau et les valeurs manquantes. Le projet l'utilise pour ses données, et ne passe à pandas que pour les bibliothèques qui l'exigent, comme pvlib (ADR 022).
 
-**Rattrapage** : ce que fait l'ingestion quand des données manquent dans l'archive, après une panne ou au premier passage : elle demande ce qui manque, en plus des jours récents, qu'une source peut encore corriger. Pour SMARD, une semaine est redemandée jusqu'à 14 jours après sa fin, puis tant que le brut n'en a pas une réponse lisible et complète (ADR 023). Pour éCO2mix, un mois est redemandé de la même façon, et aussi quand ODRÉ en publie une version plus avancée (ADR 024). Pour Open-Meteo, un mois de météo observée suit la règle de SMARD, et un run n'est redemandé que tant que le brut n'en a pas une réponse lisible et complète, sauf six runs qu'Open-Meteo n'a pas, listés, que seul `--full` redemande (ADR 025).
+**Rattrapage** : ce que fait l'ingestion quand des données manquent dans l'archive, après une panne ou au premier passage : elle demande ce qui manque, en plus des jours récents, qu'une source peut encore corriger. Pour SMARD, une semaine est redemandée jusqu'à 14 jours après sa fin, puis tant que le brut n'en a pas une réponse lisible et complète (ADR 023). Pour éCO2mix, un mois est redemandé de la même façon, et aussi quand ODRÉ en publie une version plus avancée (ADR 024). Pour Open-Meteo, un mois de météo observée suit la règle de SMARD, et un run n'est redemandé que tant que le brut n'en a pas une réponse lisible et complète, sauf six runs qu'Open-Meteo n'a pas, listés, que seul `--full` redemande (ADR 025). Pour Enedis, qui publie chaque trimestre, tous les mois sont redemandés pendant les 7 jours qui suivent une nouvelle publication (ADR 026).
 
 **Réanalyse** : reconstitution de la météo passée par un modèle qui intègre toutes les observations disponibles (stations, satellites, ballons). C'est la « météo observée » la plus complète et la plus homogène ; ERA5 en est l'exemple le plus connu.
 
@@ -172,8 +172,10 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Run (d'un modèle météo)** : une exécution complète d'un modèle de prévision, lancée à heure fixe (par exemple à 00 h UTC). Chaque run produit une prévision pour les jours suivants ; il n'est disponible que quelques heures après son lancement, environ 6 h 30 pour ECMWF IFS (ADR 025).
 
+**Secret statistique** : règle qui interdit de publier un agrégat qui trahirait le comportement d'un foyer. Chez Enedis, une courbe moyenne de moins de 5 000 sites relevés n'est publiée à la demi-heure que la semaine ou le jour du pic du mois ; le reste du temps, elle vaut la moyenne de sa journée, recopiée sur 48 demi-heures. Sous 100 sites, elle est masquée. Le nettoyé d'Ampère marque ces valeurs d'un pas de 1 440 minutes (ADR 026).
+
 **Schéma OpenAPI** : description de toutes les routes d'une API (chemins, paramètres, réponses) dans le format standard OpenAPI. FastAPI le produit à partir du code, sur `/api/openapi.json`, et en tire deux pages de documentation interactives, `/api/docs` et `/api/redoc` (ADR 018). La démo en ligne ne sert que le schéma : ces pages chargent leurs scripts depuis un CDN (ADR 021).
 
-**Table longue** : une table qui a une ligne par mesure et par instant, avec une colonne qui nomme la mesure, plutôt qu'une colonne par mesure. Chaque ligne porte ainsi son propre pas de temps et sa propre version, et une mesure de plus ne change pas le schéma. Les nettoyés d'éCO2mix et d'Open-Meteo sont rangés ainsi (ADR 024 et 025).
+**Table longue** : une table qui a une ligne par mesure et par instant, avec une colonne qui nomme la mesure, plutôt qu'une colonne par mesure. Chaque ligne porte ainsi son propre pas de temps et sa propre version, et une mesure de plus ne change pas le schéma. Les nettoyés d'éCO2mix, d'Open-Meteo et d'Enedis sont rangés ainsi (ADR 024 à 026).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke toutes les dates en UTC et ne les convertit en heure de Paris qu'à l'affichage. Il évite ainsi les pièges des journées de 23 et de 25 heures.

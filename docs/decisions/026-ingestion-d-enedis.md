@@ -15,8 +15,8 @@ Enedis publie, au pas de la demi-heure, la consommation des sites de 36 kVA au p
   - le nombre de sites, le même pour les 48 demi-heures d'une journée ;
   - l'énergie totale, modélisée à partir d'un profil ajusté à la température pour les sites sans courbe relevée ;
   - trois courbes moyennes, en Wh par demi-heure, des seuls sites à compteur communicant. Les courbes n° 1 et n° 2 partagent ces sites en deux moitiés, selon la part de leur consommation entre 8 h et 20 h, ou le coefficient de variation de leur production ; la courbe n° 1 + n° 2 les réunit ;
-  - pour chaque courbe, un indice : la part des sites du segment qu'elle représente ;
-- **le secret statistique** : sous 5 000 sites relevés sur un trimestre, une courbe n'est publiée à la demi-heure que la semaine du pic du mois, et sous 500 que le jour du pic. Le reste du temps, c'est la moyenne de la journée, recopiée sur ses 48 demi-heures. Sous 100 sites, la valeur est masquée, avec l'indice « S ». En janvier 2026, 21 segments résidentiels sur 39 ont une vraie courbe tout le mois, 11 seulement la semaine du pic, 6 le jour du pic, et un est masqué ; le solaire des toits n'a que quelques demi-heures masquées.
+  - pour chaque courbe, un indice : la part des sites du segment qu'elle représente, en pour cent, ou « < 1 » pour une moitié de courbe d'un très grand segment ;
+- **le secret statistique** : sous 5 000 sites relevés sur un trimestre, une courbe n'est publiée à la demi-heure que la semaine du pic du mois, et sous 500 que le jour du pic. Le reste du temps, c'est la moyenne de la journée, recopiée sur ses 48 demi-heures. Sous 100 sites, la valeur est masquée, avec l'indice « S ». En janvier 2026, 21 segments résidentiels sur 39 ont une vraie courbe tout le mois, 11 seulement la semaine du pic, 6 le jour du pic, et un est masqué ; le solaire des toits n'a que quelques demi-heures masquées. Le secret touche aussi l'énergie totale, plus rarement : sur trois ans, 439 demi-heures du solaire des toits la masquent.
 
 ## Options envisagées
 
@@ -61,7 +61,7 @@ Option 1 dans les quatre cas.
   - les mois de Paris, du 1er juillet 2023 au mois en cours, une requête par mois et par jeu, en Parquet par la couche de compatibilité (`/api/explore/v2.1/catalog/datasets/<jeu>/exports/parquet`), de 20 Mo au plus. Pour la consommation : la région 84 et les profils qui commencent par RES. Pour l'injection : la région 84, la filière « F5 : Solaire » et les plages de 0 à 3 kW et de 3 à 9 kW ;
   - pendant les 7 jours qui suivent la première réception d'une nouvelle publication, chaque passage redemande tous les mois : un passage interrompu ne laisse pas de mois à la publication précédente. Le reste du temps, seul un mois sans réponse lisible est redemandé, et `--full` les redemande tous ;
   - une pause de 0,5 s sépare deux requêtes. Dans le brut, la source est `enedis`, les jeux `publication`, `consumption` et `solar`, et la requête d'une réponse est le nom du jeu d'Enedis ou le mois (`2026-01`).
-- **Schéma** : des métadonnées sont un objet avec une date `dataUpdatedAt`. Un mois est un Parquet lisible, avec les colonnes attendues et leurs types ; ses instants sont sur la demi-heure et dans le mois ; il n'a que la région 84 et les segments demandés, sans doublon ; ses indices sont des nombres ou « S ». Une réponse fautive est une erreur du rapport, et le passage continue sans elle.
+- **Schéma** : des métadonnées sont un objet avec une date `dataUpdatedAt`. Un mois est un Parquet lisible, avec les colonnes attendues et leurs types ; ses instants sont sur la demi-heure et dans le mois ; il n'a que la région 84 et les segments demandés, sans doublon ; ses indices sont des nombres entiers, « < 1 » ou « S ». Une réponse fautive est une erreur du rapport, et le passage continue sans elle.
 - **Nettoyé** : `clean/enedis/consumption.parquet` et `clean/enedis/solar.parquet`, reconstruits à chaque passage. Chaque mois vient de sa réponse lisible la plus complète, la plus récente à nombre de lignes égal : un mois qu'Enedis ne publie plus revient vide, et le nettoyé garde la dernière version publiée. C'est une table longue au pas publié de la demi-heure, une exception au pas de 15 min de l'ADR 022, comme pour la météo (ADR 025) :
   - `start` : le début de la demi-heure, en UTC ;
   - `profile` et `power_range`, les libellés d'Enedis ; le solaire n'a que `power_range` ;
@@ -73,14 +73,14 @@ Option 1 dans les quatre cas.
   Une valeur masquée reste absente. La simulation passera au quart d'heure (ADR 005), et choisira ses segments d'après leur pas.
 - **Contrôles** :
   - ligne invalide : une même demi-heure deux fois pour un segment et une mesure ; un instant hors de la demi-heure ; une valeur hors de ses bornes (un nombre de sites ou une puissance totale négatifs, une courbe moyenne hors de 0 à 36 000 W pour la consommation et de 0 à 9 000 W pour le solaire) ;
-  - erreur : une demi-heure sans nombre de sites ou sans puissance totale pour un segment, du 1er juillet 2023 à la dernière demi-heure publiée (48 par jour de Paris, 46 et 50 aux changements d'heure) ; une réponse fautive ; un problème signalé par `verify()` ;
+  - erreur : une demi-heure sans nombre de sites pour un segment, du 1er juillet 2023 à la dernière demi-heure publiée (48 par jour de Paris, 46 et 50 aux changements d'heure). Le nombre de sites dit qu'une ligne existe ; un total ou une courbe absents sont masqués, pas manquants. Et aussi une réponse fautive, ou un problème signalé par `verify()` ;
   - avertissement : une dernière demi-heure publiée vieille de plus de 150 jours, soit un mois de retard sur la publication trimestrielle attendue.
 - **Commande** : `ampere ingest enedis [--full]`.
 
 ## Conséquences
 
-- Le premier passage fait 80 requêtes : les métadonnées des deux jeux, et 39 mois pour chacun. Un passage ordinaire en fait deux, les jours qui suivent une publication 80.
-- Le secret statistique prive 18 segments résidentiels sur 39 d'une vraie courbe la plupart du temps : l'étape 3 choisira les segments du quartier en conséquence.
+- Le premier passage, le 27 septembre 2026, a fait 80 requêtes, les métadonnées des deux jeux et 39 mois pour chacun, en 7 minutes. Il a gardé 23 Mo de brut ; le nettoyé de la consommation compte 9 848 590 valeurs, dans 38 Mo, et celui du solaire 524 324, dans 1,9 Mo. Un passage ordinaire fait deux requêtes, ceux des 7 jours qui suivent une publication 80.
+- Sur les trois ans, la courbe globale de 20 segments résidentiels est à la demi-heure de bout en bout. Pour 18 autres, le secret statistique ne garde la demi-heure que la semaine ou le jour du pic de chaque mois, et il masque le dernier : l'étape 3 choisira les segments du quartier en conséquence.
 - L'énergie totale est en partie modélisée par Enedis ; seules les courbes moyennes sont des mesures.
 - Si Enedis retire sa couche de compatibilité, les exports passeront par l'API native, en CSV.
 - La conception note le changement de plateforme, et le sens des courbes et de l'indice.
