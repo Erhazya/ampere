@@ -106,8 +106,8 @@ Option 1 dans les six cas. Pour la reconstruction du nettoyé, la première vers
 
 ## Conséquences
 
-- Le premier passage fait 82 requêtes, en deux minutes environ ; les suivants, 4 pour les périodes des versions, puis le mois en cours et, jusqu'au 14, le précédent, pour chaque zone, et le mois suivant le dernier jour du mois. Le 27 septembre 2026, le brut d'éCO2mix pesait 11 Mo, et le nettoyé 568 684 valeurs en 2,6 Mo.
-- Chaque passage lit une fois chaque mois gardé, pour savoir s'il est acquis, et en reconstruit le nettoyé sans le relire. Une lecture en colonnes deviendra nécessaire avec Enedis, près de dix fois plus volumineux.
+- Le premier passage fait 82 requêtes, en deux minutes environ ; les suivants, 4 pour les périodes des versions, puis le mois en cours et, jusqu'au 14, le précédent, pour chaque zone, et le mois suivant le dernier jour du mois : 6 à 10 requêtes. Le 27 septembre 2026, le brut d'éCO2mix pesait 11 Mo, et le nettoyé 568 700 valeurs en 2,6 Mo.
+- Chaque passage lit une fois chaque mois gardé, pour savoir s'il est acquis, et en reconstruit le nettoyé sans le relire : 15 s pour un passage sans réponse nouvelle, le 27 septembre 2026, contre 25 s dans la première version. Une lecture en colonnes deviendra nécessaire avec Enedis, près de dix fois plus volumineux.
 - Entre la sortie d'un mois de la fenêtre du temps réel et la publication de son consolidé, ce mois ne change plus chez nous.
 - La simulation devra traiter les 4 quarts d'heure qu'ODRÉ ne donne pas au retour à l'heure d'hiver, par une règle écrite, et non les combler en silence.
 - À la publication d'un trimestre consolidé, ses trois mois sont redemandés une fois ; à celle d'une année définitive, ses douze mois.

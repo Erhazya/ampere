@@ -110,7 +110,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Docker rootless** : Docker dont le démon tourne sous un compte ordinaire, sans droits d'administration. Le compte de développement du VPS s'en sert pour essayer les images avant un push, sans jamais toucher au Docker du système, dont l'accès équivaut à root (ADR 014 et 020). La démo en ligne tourne de la même façon, sous le compte `demos` de la plateforme du portfolio (ADR 021).
 
-**Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception. Sur ODRÉ, le temps réel couvre les 90 derniers jours, et les versions consolidée et définitive arrivent par paquets de plusieurs mois. Pour chaque quart d'heure, le nettoyé d'Ampère garde la version la plus avancée (ADR 024).
+**Données temps réel, consolidées, définitives** : trois versions successives d'une même mesure publiée par RTE. Chacune corrige la précédente à mesure que les informations arrivent. D'où la règle du projet : stocker chaque version reçue, avec sa date de réception. Sur ODRÉ, le temps réel couvre les 90 derniers jours, et les versions consolidée et définitive arrivent par paquets de plusieurs mois. Le nettoyé d'Ampère prend chaque mois dans la version la plus avancée qui le couvre en entier (ADR 024).
 
 **DuckDB** : moteur de base de données analytique qui tourne dans le programme lui-même, sans serveur. Il interroge directement des fichiers Parquet en SQL.
 
