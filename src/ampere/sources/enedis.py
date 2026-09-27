@@ -27,7 +27,7 @@ from ampere.data.clean import Report, write_parquet
 from ampere.data.days import PARIS, day_bounds, every_day, paris_day, paris_months, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 from ampere.sources.archive import JSON, fetch
-from ampere.sources.shapes import SchemaError, load_json
+from ampere.sources.shapes import SchemaError, load_json, parquet_footer
 
 log = logging.getLogger(__name__)
 
@@ -500,22 +500,11 @@ def parse_publication(content: bytes, url: str) -> datetime:
     raise SchemaError(f"{url}: no date of publication, dataUpdatedAt {value!r}")
 
 
-def footer(content: bytes, url: str) -> tuple[int, pl.Schema]:
-    """The number of rows and the columns of a Parquet export, read from its footer alone."""
-    try:
-        scan = pl.scan_parquet(io.BytesIO(content))
-        return scan.select(pl.len()).collect().item(), scan.collect_schema()
-    # Polars may even panic on a damaged file, and its panic is a BaseException: caught here, it
-    # makes the response faulty instead of stopping every run that reads it again.
-    except (pl.exceptions.PolarsError, pl.exceptions.PanicException, OSError) as error:
-        raise SchemaError(f"{url}: not a Parquet export ({error})") from error
-
-
 def read_month(content: bytes, month: Month, url: str) -> pl.DataFrame:
     """The rows of a monthly export, as Enedis sends them, after a check of their shape: first
     their number and their columns, from the footer, then the columns Ampère reads."""
     dataset = month.dataset
-    rows, schema = footer(content, url)
+    rows, schema = parquet_footer(content, url)
     if rows > MAX_ROWS or len(schema) > MAX_COLUMNS:
         raise SchemaError(
             f"{url}: {rows} rows in {len(schema)} columns, more than a month of Enedis holds"
