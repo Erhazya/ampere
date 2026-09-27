@@ -165,9 +165,10 @@ def fetch(
     http: httpx2.Client, store: RawStore, name: str, url: str, sleep: Callable[[float], None]
 ) -> bytes:
     """GET a SMARD file and keep it in the raw layer, before anything reads it."""
-    return fetch_json(
+    content, _ = fetch_json(
         http, store, source=SOURCE, dataset=name, url=url, max_bytes=MAX_BYTES, sleep=sleep
     )
+    return content
 
 
 def parse_index(content: bytes, url: str) -> list[int]:
@@ -195,7 +196,12 @@ def parse_series(content: bytes, url: str) -> list[tuple[int, float | None]]:
         price = point[1]
         if price is not None and not (is_number(price)):
             raise SchemaError(f"{url}: unexpected price {point!r}")
-        points.append((point[0], None if price is None else float(price)))
+        try:
+            # An instant and a price that Python can hold, or the shape has changed.
+            moment(point[0])
+            points.append((point[0], None if price is None else float(price)))
+        except (OverflowError, OSError, ValueError) as error:
+            raise SchemaError(f"{url}: unexpected point {point!r}") from error
     return points
 
 

@@ -12,7 +12,7 @@ def load_json(content: bytes, url: str) -> Any:
     """The JSON of a response; a SchemaError, with its address, if it is not JSON."""
     try:
         return json.loads(content)
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
         raise SchemaError(f"{url}: not JSON ({error})") from error
 
 

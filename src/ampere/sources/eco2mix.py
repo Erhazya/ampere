@@ -2,15 +2,15 @@
 the solar output of Auvergne-Rhône-Alpes (ADR 024).
 
 ODRÉ keeps each figure in up to three versions: real time, then consolidated, then definitive. A run
-asks ODRÉ which periods the consolidated and definitive versions cover, then fetches the Paris
-months that can still change, up to 14 days after their end, those that a more final version now
-covers, and those the raw layer does not hold whole. It keeps every response in the raw layer,
-rebuilds clean/eco2mix/measures.parquet from it alone, and checks the result.
+asks ODRÉ which periods each version covers, then fetches the Paris months that can still change,
+up to 14 days after their end, those that a more final version now covers, and those the raw layer
+does not hold whole. It keeps every response in the raw layer, rebuilds
+clean/eco2mix/measures.parquet month by month from the responses it has chosen, and checks it.
 """
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -22,12 +22,14 @@ import polars as pl
 
 from ampere.data.clean import Report, quarter_hours_per_day, write_parquet
 from ampere.data.days import (
+    PARIS,
     QUARTER_HOUR,
     day_bounds,
     every_day,
     first_pass,
     never_happened,
     paris_day,
+    quarter_hours,
 )
 from ampere.data.raw import DamagedRawFile, RawStore
 from ampere.sources.archive import fetch_json
@@ -47,6 +49,8 @@ PAUSE = 0.5
 MAX_BYTES = 20_000_000
 # Real time comes about an hour late: later than this, its feed has stopped.
 STALE_AFTER = timedelta(hours=3)
+# After this hour in Paris, RTE's forecast of tomorrow should be out.
+PUBLISHED_BY = 14
 HALF_HOUR = timedelta(minutes=30)
 # The two datasets of each level on ODRÉ: real time, and consolidated or definitive.
 TR, CONS_DEF = "tr", "cons-def"
@@ -74,12 +78,13 @@ class Measure:
 
 @dataclass(frozen=True)
 class Area:
-    """A zone of éCO2mix and the measures Ampère takes from it."""
+    """A zone of éCO2mix, the measures Ampère takes from it, and the one whose delay it watches."""
 
     name: str
     level: str
     region: str | None
     measures: tuple[Measure, ...]
+    watched: str
 
 
 FRANCE = Area(
@@ -91,6 +96,7 @@ FRANCE = Area(
         Measure("co2_g_per_kwh", "taux_co2", 0, 500, HALF_HOUR),
         Measure(FORECAST, "prevision_j1", 10_000, 150_000, QUARTER_HOUR),
     ),
+    "consumption_mw",
 )
 AUVERGNE_RHONE_ALPES = Area(
     "ARA",
@@ -101,6 +107,7 @@ AUVERGNE_RHONE_ALPES = Area(
         # Above 100 % when RTE's installed capacity lags behind the real one.
         Measure("solar_load_factor_pct", "tch_solaire", 0, 150, HALF_HOUR),
     ),
+    "solar_mw",
 )
 AREAS = (FRANCE, AUVERGNE_RHONE_ALPES)
 
@@ -153,15 +160,15 @@ def dataset(area: Area, kind: str) -> str:
     return f"{area.level}-{kind}"
 
 
-def coverage_url(area: Area) -> str:
-    """The first and last instants of the consolidated and definitive versions of a zone."""
+def coverage_url(area: Area, kind: str) -> str:
+    """The first and last instants of each version of a zone in one of its datasets."""
     query = {
         "select": "nature, min(date_heure) as first, max(date_heure) as last",
         "group_by": "nature",
     }
     if area.region is not None:
         query["where"] = f"code_insee_region='{area.region}'"
-    return f"{API}/eco2mix-{dataset(area, CONS_DEF)}/records?{urlencode(query)}"
+    return f"{API}/eco2mix-{dataset(area, kind)}/records?{urlencode(query)}"
 
 
 def month_url(area: Area, kind: str, start: datetime, end: datetime) -> str:
@@ -184,17 +191,17 @@ def months(first: date, last: date) -> list[tuple[datetime, datetime]]:
 
 
 def best_version(
-    coverage: dict[str, tuple[datetime, datetime]], start: datetime, end: datetime
+    periods: dict[str, tuple[datetime, datetime]], start: datetime, end: datetime
 ) -> str:
     """The most final version that covers a whole month, down to its last half-hour."""
 
     def covers(first: datetime, last: datetime) -> bool:
         return first <= start and end - HALF_HOUR <= last
 
-    if "definitive" in coverage and covers(*coverage["definitive"]):
+    if "definitive" in periods and covers(*periods["definitive"]):
         return "definitive"
-    periods = coverage.values()
-    if periods and covers(min(first for first, _ in periods), max(last for _, last in periods)):
+    spans = [periods[version] for version in ("consolidated", "definitive") if version in periods]
+    if spans and covers(min(first for first, _ in spans), max(last for _, last in spans)):
         return "consolidated"
     return "real_time"
 
@@ -210,28 +217,49 @@ def ingest(
     sleep: Callable[[float], None] = time.sleep,
 ) -> Report:
     """Fetch the months that can still change, that a more final version now covers, or that the
-    raw layer lacks, every month if full; then rebuild the clean measures, check them, and replace
-    the clean file if its rows are valid."""
+    raw layer lacks, every month if full; then rebuild the clean measures month by month, check
+    them, and replace the clean file if its rows are valid."""
     kept = len(store.receipts(SOURCE))
+    first = day_bounds(since)[0]
+    plan: list[tuple[MonthFile, Month, datetime]] = []
+    late: list[str] = []
     asked = 0
 
-    def ask(name: str, url: str) -> bytes:
+    def ask(name: str, url: str) -> tuple[bytes, datetime]:
         nonlocal asked
         if asked:
             sleep(PAUSE)
         asked += 1
-        return fetch_json(
+        content, receipt = fetch_json(
             http, store, source=SOURCE, dataset=name, url=url, max_bytes=MAX_BYTES, sleep=sleep
         )
+        return content, receipt.received_at
+
+    def periods(area: Area, kind: str) -> dict[str, tuple[datetime, datetime]]:
+        url = coverage_url(area, kind)
+        return parse_coverage(ask("coverage", url)[0], url, kind, first)
 
     for area in AREAS:
-        coverage = parse_coverage(ask("coverage", coverage_url(area)), coverage_url(area))
-        for start, end in months(since, paris_day(now)):
-            best = best_version(coverage, start, end)
+        settled_data = periods(area, CONS_DEF)
+        real_time = periods(area, TR)["real_time"]
+        # Up to the month of tomorrow: on the last day of a month, RTE's forecast is in the next.
+        for start, end in months(since, paris_day(now) + timedelta(days=1)):
+            best = best_version(settled_data, start, end)
             file = MonthFile(area, TR if best == "real_time" else CONS_DEF, start, end)
-            if full or not settled(store, file, best, now):
-                parse_month(ask(file.dataset, file.url), file.url, area, file.kind)
-    measures = build(store, since=since)
+            held = kept_month(store, file)
+            # A real-time month whose start has left ODRÉ's window would come back cut: it stays
+            # as it was kept, even with full.
+            whole = file.kind == CONS_DEF or real_time[0] <= start
+            if held is None or (whole and (full or not settled(held[0], file, best, now))):
+                content, received_at = ask(file.dataset, file.url)
+                held = parse_month(content, file), received_at
+                if VERSIONS.index(held[0].version) < VERSIONS.index(best):
+                    late.append(
+                        f"{area.name} {start.astimezone(PARIS):%Y-%m}: ODRÉ announces {best} data, "
+                        f"but its export is {held[0].version}"
+                    )
+            plan.append((file, *held))
+    measures = build(plan)
     log.info(
         "eco2mix: %d requests, %d new responses, %d values",
         asked,
@@ -239,6 +267,7 @@ def ingest(
         measures.height,
     )
     report = check(measures, store, since=since, now=now)
+    report.warnings[:0] = late
     path = clean / SOURCE / "measures.parquet"
     if report.invalid:
         log.error("%s kept as it was: the new values break its rules", path)
@@ -247,21 +276,23 @@ def ingest(
     return report
 
 
-def settled(store: RawStore, file: MonthFile, best: str, now: datetime) -> bool:
-    """Whether the raw layer holds a month for good, so that a run can skip it.
-
-    The month must have ended more than SETTLED_AFTER ago, and its last response must read, be of
-    the most final version ODRÉ has, and give every value of the month at its step.
-    """
-    if now < file.end + SETTLED_AFTER:
-        return False
+def kept_month(store: RawStore, file: MonthFile) -> tuple[Month, datetime] | None:
+    """The last response kept for a month, read, with its reception time; None if there is none
+    or if it no longer reads, damaged or of an unknown shape."""
     last = store.last(SOURCE, file.dataset, file.url)
     if last is None:
-        return False
+        return None
     try:
-        month = parse_month(store.read(last), file.url, file.area, file.kind)
+        return parse_month(store.read(last), file), last.received_at
     except (DamagedRawFile, SchemaError) as error:
         log.warning("%s: the kept response is unusable, asked again (%s)", file.url, error)
+        return None
+
+
+def settled(month: Month, file: MonthFile, best: str, now: datetime) -> bool:
+    """Whether a kept month can no longer change, so that a run can skip it: it ended more than
+    SETTLED_AFTER ago, it has the most final version ODRÉ announces, and it is whole."""
+    if now < file.end + SETTLED_AFTER:
         return False
     if VERSIONS.index(month.version) < VERSIONS.index(best):
         log.info("%s: ODRÉ now has %s data, asked again", file.url, best)
@@ -289,59 +320,77 @@ def published(start: datetime, end: datetime, step: timedelta) -> set[datetime]:
     return {moment for moment in instants if not first_pass(moment)}
 
 
-def parse_coverage(content: bytes, url: str) -> dict[str, tuple[datetime, datetime]]:
-    """The first and last instants of each version in a consolidated-definitive dataset."""
+def parse_coverage(
+    content: bytes, url: str, kind: str, start: datetime
+) -> dict[str, tuple[datetime, datetime]]:
+    """The first and last instants of each version in a dataset, checked before any use.
+
+    The definitive data must reach back to the start of the history, and the consolidated data
+    follow them without a hole; the real-time dataset must have its period.
+    """
     data = load_json(content, url)
     rows = data.get("results") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         raise SchemaError(f"{url}: no list of results")
-    coverage = {}
+    allowed = ("real_time",) if kind == TR else ("consolidated", "definitive")
+    periods = {}
     for row in rows:
         nature = row.get("nature") if isinstance(row, dict) else None
         version = NATURES.get(nature) if isinstance(nature, str) else None
-        if version not in ("consolidated", "definitive"):
+        if version is None or version not in allowed:
             raise SchemaError(f"{url}: unexpected period {row!r}")
-        coverage[version] = (
+        periods[version] = (
             instant(row.get("first"), url, "first"),
             instant(row.get("last"), url, "last"),
         )
-    return coverage
+    if kind == TR:
+        if "real_time" not in periods:
+            raise SchemaError(f"{url}: no period of real time")
+        return periods
+    definitive = periods.get("definitive")
+    if definitive is None or definitive[0] > start:
+        raise SchemaError(f"{url}: no definitive data back to {start:%Y-%m-%d %H:%M} UTC")
+    consolidated = periods.get("consolidated")
+    if consolidated is not None and consolidated[0] - definitive[1] > HALF_HOUR:
+        raise SchemaError(f"{url}: the consolidated data do not follow the definitive ones")
+    return periods
 
 
-def parse_month(content: bytes, url: str, area: Area, kind: str) -> Month:
+def parse_month(content: bytes, file: MonthFile) -> Month:
     """The values of a monthly export, after a check of the shape of every row."""
+    url = file.url
     rows = load_json(content, url)
     if not isinstance(rows, list):
         raise SchemaError(f"{url}: not a list of rows")
-    by_instant: dict[datetime, dict[str, Any]] = {}
+    natures = ("real_time",) if file.kind == TR else ("consolidated", "definitive")
+    month = Month({measure.name: [] for measure in file.area.measures})
+    # Per measure: its field, where its values go, and the minutes its instants must divide.
+    measures = [
+        (measure.field, month.values[measure.name], step_minutes(measure, file.kind))
+        for measure in file.area.measures
+    ]
+    seen: set[datetime] = set()
     for row in rows:
         if not isinstance(row, dict):
             raise SchemaError(f"{url}: a row that is not an object: {row!r}")
-        if area.region is not None and row.get("code_insee_region") != area.region:
+        if file.area.region is not None and row.get("code_insee_region") != file.area.region:
             raise SchemaError(f"{url}: a row of region {row.get('code_insee_region')!r}")
         start = instant(row.get("date_heure"), url, "date_heure")
         if start.minute % 15 or start.second or start.microsecond:
             raise SchemaError(f"{url}: {start:%Y-%m-%d %H:%M:%S} UTC is off the quarter-hour grid")
-        other = by_instant.setdefault(start, row)
-        if other is row:
-            continue
+        if not file.start <= start < file.end:
+            raise SchemaError(f"{url}: a row of {start:%Y-%m-%d %H:%M} UTC, outside the month")
         # When the clocks go forward, ODRÉ also gives 02:00 to 02:45, which never happened, the
         # instants of 03:00 to 03:45: the same measures, and a forecast only repeated.
-        if phantom(other):
-            by_instant[start] = row
-        elif not phantom(row):
+        if phantom(row):
+            continue
+        if start in seen:
             raise SchemaError(f"{url}: two rows for {start:%Y-%m-%d %H:%M} UTC")
-    month = Month({measure.name: [] for measure in area.measures})
-    # Per measure: its field, where its values go, and the minutes its instants must divide.
-    measures = [
-        (measure.field, month.values[measure.name], step_minutes(measure, kind))
-        for measure in area.measures
-    ]
-    for start, row in by_instant.items():
+        seen.add(start)
         nature = row.get("nature")
         version = NATURES.get(nature) if isinstance(nature, str) else None
-        if version is None:
-            raise SchemaError(f"{url}: unexpected nature {nature!r}")
+        if version is None or version not in natures:
+            raise SchemaError(f"{url}: unexpected nature {nature!r} in {file.dataset}")
         month.versions.add(version)
         for name, values, step in measures:
             value = row.get(name)
@@ -353,59 +402,78 @@ def parse_month(content: bytes, url: str, area: Area, kind: str) -> Month:
                 raise SchemaError(
                     f"{url}: a {name} value at {start:%Y-%m-%d %H:%M} UTC, between two half-hours"
                 )
-            values.append((start, float(value), version))
+            try:
+                values.append((start, float(value), version))
+            except OverflowError as error:
+                raise SchemaError(f"{url}: unexpected {name} at {start} UTC ({error})") from error
     return month
 
 
 def phantom(row: dict[str, Any]) -> bool:
-    """Whether a row stands for a Paris hour that never happened."""
-    try:
-        local = datetime.strptime(f"{row.get('date')} {row.get('heure')}", "%Y-%m-%d %H:%M")
-    except ValueError:
+    """Whether a row stands for a Paris hour that never happened: only a 02:xx can."""
+    hour = row.get("heure")
+    if not (isinstance(hour, str) and hour.startswith("02:")):
         return False
-    return never_happened(local)
+    try:
+        return never_happened(datetime.strptime(f"{row.get('date')} {hour}", "%Y-%m-%d %H:%M"))
+    except (ValueError, OverflowError):
+        return False
 
 
-def build(store: RawStore, *, since: date) -> pl.DataFrame:
-    """The clean measures, rebuilt from the last response of each month in the raw layer.
+def build(plan: Iterable[tuple[MonthFile, Month, datetime]]) -> pl.DataFrame:
+    """The clean measures, month by month from the responses a run has chosen.
 
-    A half-hour value covers its two quarter-hours. For each quarter-hour, the most final version
-    wins, then the response received last. An absent value stays absent.
+    A half-hour value covers its two quarter-hours; an absent value stays absent.
     """
-    frames = [
-        values_frame(
-            parse_month(store.read(receipt), receipt.request, area, kind),
-            area,
-            kind,
-            receipt.received_at,
-        )
-        for area in AREAS
-        for kind in (TR, CONS_DEF)
-        for receipt in store.latest(SOURCE, dataset(area, kind))
-    ]
+    frames = [values_frame(month, file, received_at) for file, month, received_at in plan]
     values = pl.concat(frames) if frames else SCHEMA.to_frame()
     return (
         values.with_columns(quarter=pl.int_ranges(0, pl.col("step_minutes").cast(pl.Int64) // 15))
         .explode("quarter", empty_as_null=False)
         .with_columns(pl.col("start") + pl.duration(minutes=pl.col("quarter") * 15))
         .drop("quarter")
-        .filter(pl.col("start") >= day_bounds(since)[0])
-        .sort(
-            ["area", "measure", "start", "version", "received_at"],
-            descending=[False, False, False, True, True],
-        )
-        .unique(["area", "measure", "start"], keep="first", maintain_order=True)
+        .sort("area", "measure", "start")
     )
 
 
-def values_frame(month: Month, area: Area, kind: str, received_at: datetime) -> pl.DataFrame:
-    """The values of one response, one row per measure and instant, at their published step."""
-    rows = [
-        (start, area.name, measure.name, value, step_minutes(measure, kind), version, received_at)
-        for measure in area.measures
-        for start, value, version in month.values[measure.name]
-    ]
-    return pl.DataFrame(rows, schema=SCHEMA, orient="row")
+def values_frame(month: Month, file: MonthFile, received_at: datetime) -> pl.DataFrame:
+    """The values of one monthly response, one row per measure and instant, at their published
+    step. The columns are built as lists, and the instants as whole microseconds, which Polars
+    takes far faster than Python datetimes."""
+    starts: list[int] = []
+    names: list[str] = []
+    numbers: list[float] = []
+    steps: list[int] = []
+    versions: list[str] = []
+    for measure in file.area.measures:
+        step = step_minutes(measure, file.kind)
+        for start, value, version in month.values[measure.name]:
+            starts.append(int(start.timestamp()) * 1_000_000)
+            names.append(measure.name)
+            numbers.append(value)
+            steps.append(step)
+            versions.append(version)
+    frame = pl.DataFrame(
+        {
+            "start": starts,
+            "measure": names,
+            "value": numbers,
+            "step_minutes": steps,
+            "version": versions,
+        },
+        schema={
+            "start": pl.Int64,
+            "measure": SCHEMA["measure"],
+            "value": pl.Float64,
+            "step_minutes": pl.UInt8,
+            "version": SCHEMA["version"],
+        },
+    )
+    return frame.with_columns(
+        pl.col("start").cast(SCHEMA["start"]),
+        pl.lit(file.area.name, dtype=SCHEMA["area"]).alias("area"),
+        pl.lit(received_at, dtype=SCHEMA["received_at"]).alias("received_at"),
+    ).select(SCHEMA.names())
 
 
 def step_minutes(measure: Measure, kind: str) -> int:
@@ -413,48 +481,104 @@ def step_minutes(measure: Measure, kind: str) -> int:
 
 
 def check(measures: pl.DataFrame, store: RawStore, *, since: date, now: datetime) -> Report:
-    """Invalid rows; errors for each measure up to yesterday; a warning when real time is late.
+    """Invalid rows; errors for each measure up to the day before; warnings for late data.
 
-    Today is not checked: real time comes about an hour late.
+    The day before is checked from 03:00, once its real time, about an hour late, has come; today
+    is not checked.
     """
     report = Report(invalid=invalid_rows(measures, now=now))
+    days = list(every_day(since, paris_day(now - STALE_AFTER) - timedelta(days=1)))
+    # ODRÉ never gives the first pass of the hour lived twice: it is not counted, and seeing it
+    # means ODRÉ has changed.
+    passes = first_passes(days)
+    report.warnings.extend(
+        f"{day}: ODRÉ now gives the first pass of 02:00, not counted"
+        for day in sorted({paris_day(start) for start in measures.filter(passes)["start"]})
+    )
     counts = {
         (area, name, day): count
-        for area, name, day, count in quarter_hours_per_day(measures, by=["area", "measure"]).rows()
+        for area, name, day, count in quarter_hours_per_day(
+            measures.filter(~passes), by=["area", "measure"]
+        ).rows()
     }
-    days = {
-        day: len(published(*day_bounds(day), QUARTER_HOUR))
-        for day in every_day(since, paris_day(now) - timedelta(days=1))
-    }
+    expected = {day: len(published(*day_bounds(day), QUARTER_HOUR)) for day in days}
     for area in AREAS:
         for measure in area.measures:
-            for day, expected in days.items():
+            for day, count in expected.items():
                 found = counts.get((area.name, measure.name, day), 0)
-                if found < expected:
+                if found < count:
                     report.errors.append(
-                        f"{area.name} {measure.name} {day}: {expected - found} of {expected} "
+                        f"{area.name} {measure.name} {day}: {count - found} of {count} "
                         "quarter-hours missing"
                     )
-    latest = measures.filter(
-        (pl.col("area") == FRANCE.name)
-        & (pl.col("measure") == "consumption_mw")
-        & (pl.col("version") == "real_time")
-    )["start"].max()
-    if not isinstance(latest, datetime):
-        report.warnings.append("real time: no consumption")
-    elif now - (latest + QUARTER_HOUR) > STALE_AFTER:
-        report.warnings.append(
-            f"real time: the last consumption ends at {latest + QUARTER_HOUR:%Y-%m-%d %H:%M} UTC"
-        )
+    report.warnings.extend(late_real_time(measures, now))
+    report.warnings.extend(late_forecast(measures, now))
     report.errors.extend(f"raw layer: {problem}" for problem in store.verify(SOURCE))
     return report
 
 
+def first_passes(days: Iterable[date]) -> pl.Expr:
+    """Whether a row stands in the first pass of the hour lived twice, on the days checked."""
+    instants = [
+        start
+        for day in days
+        if quarter_hours(day) == 100
+        for start in (day_bounds(day)[0] + i * QUARTER_HOUR for i in range(100))
+        if first_pass(start)
+    ]
+    return pl.col("start").is_in(pl.Series(instants, dtype=SCHEMA["start"]).implode())
+
+
+def late_real_time(measures: pl.DataFrame, now: datetime) -> list[str]:
+    """A warning for each zone whose last real-time value ended more than STALE_AFTER ago."""
+    warnings = []
+    for area in AREAS:
+        latest = measures.filter(
+            (pl.col("area") == area.name)
+            & (pl.col("measure") == area.watched)
+            & (pl.col("version") == "real_time")
+        )["start"].max()
+        if not isinstance(latest, datetime):
+            warnings.append(f"real time: no {area.name} {area.watched}")
+        elif now - (latest + QUARTER_HOUR) > STALE_AFTER:
+            warnings.append(
+                f"real time: the last {area.name} {area.watched} ends at "
+                f"{latest + QUARTER_HOUR:%Y-%m-%d %H:%M} UTC"
+            )
+    return warnings
+
+
+def late_forecast(measures: pl.DataFrame, now: datetime) -> list[str]:
+    """A warning when, in the afternoon, RTE's forecast of tomorrow is not whole."""
+    if now.astimezone(PARIS).hour < PUBLISHED_BY:
+        return []
+    tomorrow = paris_day(now) + timedelta(days=1)
+    start, end = day_bounds(tomorrow)
+    found = measures.filter(
+        (pl.col("measure") == FORECAST) & (pl.col("start") >= start) & (pl.col("start") < end)
+    ).height
+    expected = len(published(start, end, QUARTER_HOUR))
+    if found >= expected:
+        return []
+    return [f"{tomorrow}: {found} of {expected} quarter-hours of RTE's forecast published so far"]
+
+
 def invalid_rows(measures: pl.DataFrame, *, now: datetime) -> list[str]:
-    """The rows the clean file must not hold: a value outside the limits of its measure, a measure
-    dated after the run, or RTE's forecast dated after tomorrow."""
+    """The rows the clean file must not hold: a quarter-hour twice, an instant off the grid, a
+    value outside the limits of its measure, a measure dated after the run, or RTE's forecast
+    dated after tomorrow."""
+    key = ["area", "measure", "start"]
+    duplicates = measures.group_by(key).len().filter(pl.col("len") > 1).sort(key)
+    invalid = [
+        f"{start:%Y-%m-%d %H:%M} UTC: {area} {name} {count} values"
+        for area, name, start, count in duplicates.rows()
+    ]
+    off_grid = measures.filter(pl.col("start").dt.truncate("15m") != pl.col("start"))
+    invalid.extend(
+        f"{start:%Y-%m-%d %H:%M:%S} UTC: {area} {name} not on a quarter-hour"
+        for area, name, start in off_grid.select(key).rows()
+    )
     after_tomorrow = day_bounds(paris_day(now) + timedelta(days=1))[1]
-    invalid: list[str] = []
     for area in AREAS:
         for measure in area.measures:
             rows = measures.filter(
@@ -482,9 +606,8 @@ def instant(value: object, url: str, name: str) -> datetime:
     if isinstance(value, str):
         try:
             moment = datetime.fromisoformat(value)
-        except ValueError:
-            pass
-        else:
             if moment.utcoffset() is not None:
                 return moment.astimezone(UTC)
+        except (ValueError, OverflowError):
+            pass
     raise SchemaError(f"{url}: unexpected {name} {value!r}")

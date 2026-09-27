@@ -423,6 +423,10 @@ def test_an_unexpected_shape_stops_with_its_url_and_stays_in_the_archive(
         b'{"meta_data": {"version": 1}, "series": [["1759096800000", 51.6]]}',
         b'{"meta_data": {"version": 1}, "series": [[1759096800000, "51.6"]]}',
         b'{"meta_data": {"version": 1}, "series": [[1759096800000, true]]}',
+        # Values that Python cannot hold: a price of 400 digits, an instant far in the future.
+        b'{"meta_data": {"version": 1}, "series": [[1759096800000, ' + b"9" * 400 + b"]]}",
+        b'{"meta_data": {"version": 1}, "series": [[100000000000000000000, 51.6]]}',
+        b"[" * 100_000 + b"]" * 100_000,
     ],
 )
 def test_a_series_must_keep_its_known_shape(body: bytes) -> None:
