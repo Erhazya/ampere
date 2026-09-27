@@ -252,19 +252,20 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 - **Pièges** : les champs date et heure locaux subissent les changements d'heure, alors que le champ `date_heure` est en UTC. ODRÉ range ses lignes en heures de Paris : il donne au printemps l'heure qui n'existe pas, aux instants de la suivante, et à l'automne un seul des deux passages de l'heure vécue deux fois (ADR 024). En consolidé et en définitif, les mesures nationales ne sont remplies qu'à la demi-heure, sur des lignes au quart d'heure. L'intensité CO₂ ne compte pas les importations (section 5.6).
 - **Licence** : Licence Ouverte 2.0, source à citer : « RTE, éCO2mix ».
 
-#### Enedis, consommation des foyers
+#### Enedis, consommation des foyers *(ADR 001 et 026)*
 
 - **Contenu** ([conso-inf36-region](https://opendata.enedis.fr/datasets/conso-inf36-region/)) : pour chaque demi-heure, chaque région, chaque profil et chaque tranche de puissance souscrite, le nombre de foyers, l'énergie totale consommée et la courbe moyenne d'un foyer.
 - **En Auvergne-Rhône-Alpes** : 82 segments. Les profils résidentiels sont RES1, RES11, RES2, RES2WE, RES3 et RES4 ; leur sens exact sera documenté à l'étape 2. Les tranches vont de 0-3 kVA à 30-36 kVA, certaines regroupées.
 - **Historique et rythme** : de juillet 2023 à juin 2026, en fenêtre glissante, soit environ 4,3 millions de lignes pour la région. La dernière publication date du 30 juillet 2026 ; la suivante est attendue fin octobre 2026.
-- **Accès** : API sans clé, compatible avec celle d'ODRÉ.
+- **Accès** : API sans clé. Le portail a changé de plateforme : l'ancienne API, compatible avec celle d'ODRÉ, survit pour les lignes et les exports, Parquet compris, et l'API native donne les métadonnées, dont la date de la dernière publication (ADR 026).
+- **Champs** : le nombre de sites, l'énergie totale, modélisée pour les sites sans courbe relevée, et trois courbes moyennes des sites à compteur communicant. Les courbes n° 1 et n° 2 partagent ces sites en deux moitiés selon la part de leur consommation entre 8 h et 20 h ; la courbe n° 1 + n° 2, la courbe globale, les réunit. L'indice de représentativité est la part des sites du segment qu'une courbe représente.
 - **Pièges** :
   - les valeurs sont des Wh par demi-heure : il faut les multiplier par 2 pour obtenir une puissance moyenne en W ;
-  - le sens des courbes « n°1 » et « n°2 » et celui de l'indice de représentativité sont à confirmer : a priori, on utilisera la courbe globale ;
+  - le secret statistique : sous 5 000 sites relevés, une courbe n'est publiée à la demi-heure que la semaine ou le jour du pic du mois, et vaut le reste du temps la moyenne de sa journée, recopiée sur 48 demi-heures ; sous 100, elle est masquée. En janvier 2026, 18 segments résidentiels sur 39 sont concernés ;
   - les courbes mélangent maisons et appartements.
 - **Licence** : Licence Ouverte 2.0, source à citer : « Enedis, open data ».
 
-#### Enedis, production solaire
+#### Enedis, production solaire *(ADR 026)*
 
 - **Contenu** ([prod-region](https://opendata.enedis.fr/datasets/prod-region)) : même structure pour l'électricité injectée sur le réseau, par filière (dont « Solaire ») et par tranche de puissance. Les tranches 0-3 kW et 3-9 kW correspondent aux toits de maisons.
 - **Historique, rythme et licence** : les mêmes que pour la consommation.
@@ -514,6 +515,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [023](decisions/023-ingestion-des-prix-smard.md) | Ingestion des prix spot de SMARD | Acceptée |
 | [024](decisions/024-ingestion-d-eco2mix.md) | Ingestion d'éCO2mix, de RTE | Acceptée |
 | [025](decisions/025-ingestion-de-la-meteo.md) | Ingestion de la météo d'Open-Meteo | Acceptée |
+| [026](decisions/026-ingestion-d-enedis.md) | Ingestion des courbes d'Enedis | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
