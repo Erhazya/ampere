@@ -76,6 +76,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **ADR (Architecture Decision Record)** : court document qui garde la trace d'une décision : le contexte, les options envisagées, la décision et ses conséquences. Le projet en rédige un par décision importante, dans `docs/decisions/`.
 
+**Ancre d'une adresse** (`#/status`) : la fin d'une adresse, après `#`, que le navigateur garde pour lui et n'envoie pas au serveur. Le tableau de bord y lit l'écran à montrer, sans recharger la page, et l'API n'a pas à connaître ses écrans (ADR 029).
+
 **Apache Arrow** : format de tableau en mémoire, rangé par colonnes, que partagent Polars, DuckDB et pandas. Un tableau passe ainsi de Polars à DuckDB sans être recopié, et vers pandas en une seule copie (ADR 022).
 
 **Attestation de provenance** : document signé qui dit où, quand et à partir de quel code une image a été construite. L'image d'Ampère n'en a pas encore (ADR 020).
@@ -85,6 +87,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Cache du navigateur** : copies des réponses que le navigateur garde pour ne pas les redemander. Avec l'en-tête `Cache-Control: no-cache`, il revérifie la page auprès du serveur à chaque visite, en envoyant l'empreinte de sa copie (l'ETag), et le serveur répond 304 si elle n'a pas changé. Les fichiers de `assets/` du build ont un nom qui change avec leur contenu : le navigateur peut les garder sans risque. Les autres, la page comprise, sont revérifiés à chaque visite (ADR 018). L'API fait de même pour l'export de l'écran « Data » : son ETag est l'empreinte SHA-256 du fichier, et le navigateur ne le retélécharge qu'après le traitement du jour (ADR 029).
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
+
+**Chargement différé** (*lazy loading*) : ne télécharger une partie du code qu'au moment où la page en a besoin. ECharts pèse environ 500 Ko : le build le met dans un fichier à part, que le navigateur ne demande que pour l'écran « Data » (ADR 029).
 
 **Compose (Docker Compose)** : fichier, `compose.yaml`, qui décrit comment lancer les conteneurs d'une application : l'image, le port publié, les limites, les options de sécurité. `docker compose up` crée les conteneurs, ou recrée seulement ceux dont la description a changé. Celui d'Ampère décrit la démo en ligne : l'API, et le traitement quotidien, rangé dans un profil (ADR 021 et 028).
 
