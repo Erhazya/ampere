@@ -39,11 +39,12 @@ L'auteur a choisi l'option 1 le 28 septembre 2026. Le reste suit l'ADR 006, au p
   - la position du soleil au milieu de chaque heure, puisque le rayonnement d'Open-Meteo est la moyenne de l'heure qui finit à son instant ;
   - le rayonnement sur le toit par la transposition de Perez, la plus citée, faute de celle de Muneer ;
   - puis les modèles de PVGIS : les pertes par réflexion de Martin et Ruiz, la température des cellules de Faiman, la puissance de Huld, et 14 % de pertes.
+  - une valeur manquante de la météo fait échouer le calcul : une heure sans rayonnement connu ne compte pas pour 0 W.
   
   Chaque heure donne quatre quarts d'heure de même puissance, ce qui garde l'énergie, comme l'ADR 005 le fait pour Enedis.
-- **Calage** : sur juillet à décembre 2023, la production calculée de chaque orientation est comparée à celle de PVGIS, mois par mois. Un seul facteur, le rapport des énergies des six mois, corrige l'écart des rayonnements des deux sources. Il est écrit dans le code, avec la commande qui le recalcule et le détail des mois dans `docs/mesures.md`.
-- **Validation** : sur juillet 2023 à juin 2025, par le garde-fou de l'ADR 007, le taux de charge des trois orientations est comparé à celui du solaire de la région, publié par éCO2mix, mois par mois et demi-heure par demi-heure. Les deux ne doivent pas être égaux : la région compte aussi des centrales au sol, d'autres pentes et d'autres ciels.
-- **Dépendance** : pvlib, sous licence BSD, entre dans les dépendances de l'image. Seul le traitement quotidien l'importera.
+- **Calage** : sur juillet à décembre 2023, la production calculée de chaque orientation est comparée à celle de PVGIS, mois par mois, sur les heures que les deux ont. Un seul facteur, le rapport des énergies des six mois, corrige l'écart des rayonnements des deux sources. Il est écrit dans le code, avec la commande qui le recalcule et le détail des mois dans `docs/mesures.md`.
+- **Validation** : sur juillet 2023 à juin 2025, par le garde-fou de l'ADR 007, le taux de charge des trois orientations est comparé à celui du solaire de la région, publié par éCO2mix, mois par mois et heure par heure ; la région y compte pour la moyenne de ses demi-heures. Les deux ne doivent pas être égaux : la région compte aussi des centrales au sol, d'autres pentes et d'autres ciels.
+- **Dépendance** : pvlib, sous licence BSD, entre dans les dépendances de l'image. Seul le traitement quotidien l'importera : un test vérifie que l'API, lancée comme dans l'image, ne charge ni pvlib, ni pandas, ni SciPy.
 
 ## Conséquences
 

@@ -3,6 +3,8 @@
 import json
 import mimetypes
 import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,19 @@ def test_healthz_reports_ok_and_the_version(client: TestClient, path: str) -> No
     response = client.get(path)
     assert response.status_code == 200
     assert response.json() == HEALTH
+
+
+def test_the_api_does_not_load_the_solar_model() -> None:
+    # pvlib, pandas and SciPy serve the daily job only (ADR 032): the API, started by the command
+    # line as in the image, keeps their memory and their code out of its process.
+    code = (
+        "import sys; from ampere.cli import main; from ampere.api import create_app; create_app(); "
+        "print(sorted({'pandas', 'pvlib', 'scipy'} & set(sys.modules)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "[]"
 
 
 def test_every_route_but_healthz_is_under_api() -> None:

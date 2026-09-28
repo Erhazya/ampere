@@ -7,7 +7,6 @@ the last readable answer of each orientation.
 """
 
 import logging
-import math
 import re
 import time
 from collections.abc import Callable
@@ -22,7 +21,7 @@ import polars as pl
 from ampere.data.clean import Report, write_parquet
 from ampere.data.raw import DamagedRawFile, RawStore
 from ampere.sources.archive import JSON, PAUSE, SINCE, fetch
-from ampere.sources.shapes import SchemaError, is_number, load_json
+from ampere.sources.shapes import SchemaError, finite, is_int, load_json
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ HOURS = 8_760
 MAX_BYTES = 3_000_000
 # A roof of 1 kWp gives at most about 1 kW, a little more on a cold and bright day.
 MAX_POWER_W = 1_100.0
-STAMP = re.compile(r"\d{8}:\d{4}")
+STAMP = re.compile(r"[0-9]{8}:[0-9]{4}")
 SCHEMA = pl.Schema(
     {
         "time": pl.Datetime("us", "UTC"),
@@ -148,18 +147,19 @@ def parse(content: bytes, url: str, name: str) -> pl.DataFrame:
     body = load_json(content, url)
     inputs = dig(body, url, "inputs")
     fixed = dig(inputs, url, "mounting_system", "fixed")
+    # Numbers, not booleans: Python takes JSON's true for 1 and its false for 0.
     roof = (
-        dig(inputs, url, "location", "latitude"),
-        dig(inputs, url, "location", "longitude"),
-        dig(fixed, url, "slope", "value"),
-        dig(fixed, url, "azimuth", "value"),
-        dig(inputs, url, "pv_module", "peak_power"),
-        dig(inputs, url, "pv_module", "system_loss"),
+        finite(dig(inputs, url, "location", "latitude")),
+        finite(dig(inputs, url, "location", "longitude")),
+        finite(dig(fixed, url, "slope", "value")),
+        finite(dig(fixed, url, "azimuth", "value")),
+        finite(dig(inputs, url, "pv_module", "peak_power")),
+        finite(dig(inputs, url, "pv_module", "system_loss")),
     )
     if roof != (LATITUDE, LONGITUDE, TILT, ORIENTATIONS[name], 1, LOSS):
         raise SchemaError(f"{url}: an answer for another roof than {name}: {roof}")
     years = (dig(inputs, url, "meteo_data", "year_min"), dig(inputs, url, "meteo_data", "year_max"))
-    if years != (YEAR, YEAR):
+    if not all(is_int(year) for year in years) or years != (YEAR, YEAR):
         raise SchemaError(f"{url}: an answer for {years}, not for {YEAR}")
     rows = dig(body, url, "outputs", "hourly")
     if not isinstance(rows, list) or len(rows) != HOURS:
@@ -168,17 +168,17 @@ def parse(content: bytes, url: str, name: str) -> pl.DataFrame:
     expected = datetime(YEAR, 1, 1, tzinfo=UTC)
     for row in rows:
         stamp = row.get("time") if isinstance(row, dict) else None
-        power = row.get("P") if isinstance(row, dict) else None
-        if not isinstance(stamp, str) or not STAMP.fullmatch(stamp):
+        moment = pvgis_time(stamp)
+        if moment is None:
             raise SchemaError(f"{url}: the hours are not dated as PVGIS dates them: {stamp!r}")
-        # PVGIS dates each hour of its satellite a few minutes past the hour, in UTC.
-        moment = datetime.strptime(stamp, "%Y%m%d:%H%M").replace(tzinfo=UTC)
         if moment.replace(minute=0) != expected:
             raise SchemaError(f"{url}: the hours do not follow each other at {stamp}")
-        if not is_number(power) or not math.isfinite(power) or not 0 <= power <= MAX_POWER_W:
-            raise SchemaError(f"{url}: a power out of 0 to {MAX_POWER_W} W at {stamp}: {power!r}")
+        value = row.get("P")
+        power = finite(value)
+        if power is None or not 0 <= power <= MAX_POWER_W:
+            raise SchemaError(f"{url}: a power out of 0 to {MAX_POWER_W} W at {stamp}: {value!r}")
         times.append(moment)
-        powers.append(float(power))
+        powers.append(power)
         expected += timedelta(hours=1)
     return pl.DataFrame(
         {"time": times, "orientation": [name] * HOURS, "power_w_per_kwp": powers},
@@ -188,6 +188,17 @@ def parse(content: bytes, url: str, name: str) -> pl.DataFrame:
             "power_w_per_kwp": pl.Float64(),
         },
     )
+
+
+def pvgis_time(stamp: object) -> datetime | None:
+    """The instant of a stamp of PVGIS, such as 20230101:0010, in UTC; None if it is not one.
+    PVGIS dates each hour of its satellite a few minutes past the hour."""
+    if not isinstance(stamp, str) or not STAMP.fullmatch(stamp):
+        return None
+    try:
+        return datetime.strptime(stamp, "%Y%m%d:%H%M").replace(tzinfo=UTC)
+    except ValueError:  # the shape of a stamp, but no date, such as 20230229:0010
+        return None
 
 
 def dig(value: Any, url: str, *keys: str) -> Any:

@@ -13,6 +13,7 @@ from ampere.solar import (
     LATITUDE,
     LONGITUDE,
     ROOFS,
+    WEATHER,
     Roof,
     calibration,
     calibration_report,
@@ -94,6 +95,21 @@ def test_heat_lowers_the_power() -> None:
     assert power(clear_sky(hour, 35.0), SOUTH)[0] < power(clear_sky(hour, 5.0), SOUTH)[0]
 
 
+@pytest.mark.parametrize("name", WEATHER)
+@pytest.mark.parametrize("missing", [None, float("nan")])
+def test_a_missing_value_of_the_weather_is_refused(name: str, missing: float | None) -> None:
+    # An hour without irradiance is not an hour without sun: it must not count as 0 W.
+    weather = clear_sky([datetime(2024, 6, 21, hour, tzinfo=UTC) for hour in (11, 12)])
+    weather = weather.with_columns(
+        pl.when(pl.col("time").dt.hour() == 12)
+        .then(pl.lit(missing, pl.Float64))
+        .otherwise(pl.col(name))
+        .alias(name)
+    )
+    with pytest.raises(ValueError, match=r"1 hour.*2024-06-21 12:00"):
+        production(weather, SOUTH)
+
+
 def test_the_calibration_multiplies_the_power() -> None:
     weather = clear_sky([datetime(2024, 6, 21, 12, tzinfo=UTC)])
     calibrated = production(weather, SOUTH, calibration=1.1)["power_w_per_kwp"][0]
@@ -130,23 +146,46 @@ def test_the_observed_weather_of_the_clean_layer_becomes_columns() -> None:
     assert wide.row(0, named=True)["temperature_c"] == 21.0
 
 
-def test_the_calibration_is_the_ratio_of_the_energies_of_pvgis_and_of_the_model() -> None:
-    def hours(values: list[float], minute: int) -> pl.DataFrame:
-        start = datetime(2023, 7, 1, 12, minute, tzinfo=UTC)
-        return pl.DataFrame(
-            {
-                "time": [start + timedelta(days=31 * n) for n in range(len(values))],
-                "orientation": ["south"] * len(values),
-                "power_w_per_kwp": values,
-            },
-            schema_overrides={"time": pl.Datetime("us", "UTC")},
-        )
+def hours(starts: list[datetime], values: list[float], dated: timedelta) -> pl.DataFrame:
+    """Hours of the south roof, each dated `dated` after its start: the model with its end,
+    PVGIS a few minutes after its start."""
+    return pl.DataFrame(
+        {
+            "time": [start + dated for start in starts],
+            "orientation": ["south"] * len(values),
+            "power_w_per_kwp": values,
+        },
+        schema_overrides={"time": pl.Datetime("us", "UTC")},
+    )
 
-    # July and August: PVGIS gives 10 % more in July and as much in August.
-    ours, pvgis = hours([500.0, 400.0], 0), hours([550.0, 400.0], 10)
+
+MODEL, PVGIS = timedelta(hours=1), timedelta(minutes=10)
+
+
+def test_the_calibration_is_the_ratio_of_the_energies_of_pvgis_and_of_the_model() -> None:
+    # Noon on 1 July and 1 August: PVGIS gives 10 % more in July and as much in August. The last
+    # hour of July ends in August, and counts in July.
+    starts = [datetime(2023, 7, 1, 12, tzinfo=UTC), datetime(2023, 7, 31, 23, tzinfo=UTC)]
+    starts.append(datetime(2023, 8, 1, 12, tzinfo=UTC))
+    ours = hours(starts, [500.0, 0.0, 400.0], MODEL)
+    pvgis = hours(starts, [550.0, 0.0, 400.0], PVGIS)
     months, factor = calibration(ours, pvgis)
     assert factor == pytest.approx(950 / 900)
     assert months["ratio"].to_list() == pytest.approx([1.1, 1.0])
+    assert months["hours"].to_list() == [2, 1]
+
+
+def test_the_calibration_counts_only_the_hours_both_have() -> None:
+    # The model lacks 12:00, PVGIS 13:00: only 11:00 counts, on both sides.
+    model, pvgis = (
+        [datetime(2023, 7, 1, hour, tzinfo=UTC) for hour in hours_of_each]
+        for hours_of_each in ((11, 13), (11, 12))
+    )
+    months, factor = calibration(
+        hours(model, [500.0, 700.0], MODEL), hours(pvgis, [550.0, 900.0], PVGIS)
+    )
+    assert factor == pytest.approx(1.1)
+    assert months["hours"].to_list() == [1]
 
 
 def test_the_load_factors_of_each_month_and_their_correlation() -> None:
@@ -204,6 +243,27 @@ def test_the_reports_read_the_clean_layer_through_the_guard(tmp_path: Path) -> N
 def test_the_check_fails_without_the_clean_layer() -> None:
     # The tests point AMPERE_DATA to an empty folder (conftest.py).
     assert main(["solar", "check"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("factor", "status"),
+    [
+        (CALIBRATION, 0),
+        (CALIBRATION + 0.004, 0),
+        (CALIBRATION + 0.006, 1),
+        (CALIBRATION - 0.006, 1),
+        # NaN makes every comparison false: it must not pass for a match.
+        (float("nan"), 1),
+    ],
+)
+def test_the_check_fails_when_the_data_no_longer_give_the_factor_of_the_code(
+    monkeypatch: pytest.MonkeyPatch, factor: float, status: int
+) -> None:
+    monkeypatch.setattr("ampere.solar.calibration_report", lambda clean: (pl.DataFrame(), factor))
+    monkeypatch.setattr(
+        "ampere.solar.regional_report", lambda clean, start, end: (pl.DataFrame(), 0.9)
+    )
+    assert main(["solar", "check"]) == status
 
 
 def test_the_factor_in_the_code_is_near_1() -> None:

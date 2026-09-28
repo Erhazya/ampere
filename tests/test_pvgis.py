@@ -22,6 +22,7 @@ from ampere.sources.shapes import SchemaError
 
 NOW = datetime(2026, 9, 28, 13, tzinfo=UTC)
 FIRST = datetime(2023, 1, 1, 0, 10, tzinfo=UTC)
+INDIC_DIGITS = str.maketrans("0123456789", "".join(chr(0x0660 + digit) for digit in range(10)))
 
 
 def answer(
@@ -128,13 +129,32 @@ def test_is_not_asked_by_the_daily_job() -> None:
         ),
         (lambda body: body["inputs"]["mounting_system"]["fixed"]["slope"].update(value=35), "roof"),
         (lambda body: body["inputs"]["pv_module"].update(system_loss=10.0), "roof"),
+        # JSON's true is no 1 kWp, nor its false the azimuth 0 of the south.
+        (lambda body: body["inputs"]["pv_module"].update(peak_power=True), "roof"),
+        (
+            lambda body: body["inputs"]["mounting_system"]["fixed"]["azimuth"].update(value=False),
+            "roof",
+        ),
         (lambda body: body["inputs"]["meteo_data"].update(year_max=2022), "2023"),
+        (lambda body: body["inputs"]["meteo_data"].update(year_min=2023.0), "2023"),
         (lambda body: body["outputs"].update(hourly=body["outputs"]["hourly"][:-1]), "hours"),
         (lambda body: body["outputs"]["hourly"][100].update(P=1500.0), "power"),
         (lambda body: body["outputs"]["hourly"][100].update(P=-1.0), "power"),
         (lambda body: body["outputs"]["hourly"][100].update(P="12"), "power"),
+        # An integer too large for a float.
+        (lambda body: body["outputs"]["hourly"][100].update(P=10**400), "power"),
         (lambda body: body["outputs"]["hourly"][100].update(time="20230105:0310"), "hours"),
         (lambda body: body["outputs"]["hourly"][100].update(time="5 Jan"), "hours"),
+        # Stamps shaped like PVGIS's that are no dates: 2023 has no 29 February, a day no hour 24.
+        (lambda body: body["outputs"]["hourly"][100].update(time="20230229:0410"), "hours"),
+        (lambda body: body["outputs"]["hourly"][100].update(time="20230105:2410"), "hours"),
+        # The right hour, in Arabic-Indic digits, which Python's \d and int() both accept.
+        (
+            lambda body: body["outputs"]["hourly"][100].update(
+                time="20230105:0410".translate(INDIC_DIGITS)
+            ),
+            "hours",
+        ),
     ],
 )
 def test_refuses_an_answer_of_another_shape(

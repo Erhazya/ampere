@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import math
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -232,6 +233,10 @@ def solar_check() -> int:
     log.info(
         "region: a correlation of %.3f, hour by hour, from July 2023 to June 2025", correlation
     )
+    # A NaN would make both comparisons below false, and pass for a match.
+    if not math.isfinite(factor):
+        log.error("the factor is %s: look for a fault of the model", factor)
+        return 1
     if abs(factor - 1) > 0.10:
         log.error("the model strays %.1f %% from PVGIS: look for a fault", 100 * (factor - 1))
         return 1

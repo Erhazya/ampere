@@ -75,7 +75,16 @@ def production(
     weather: pl.DataFrame, roof: Roof, *, calibration: float = CALIBRATION
 ) -> pl.DataFrame:
     """The power of a roof of 1 kWp, in W, for each hour of the weather, dated like it with the
-    end of the hour."""
+    end of the hour. A ValueError when a value of the weather is missing: an hour without
+    irradiance is not an hour without sun, and must not count as 0 W."""
+    holes = weather.filter(
+        pl.any_horizontal(pl.col(name).is_null() | pl.col(name).is_nan() for name in WEATHER)
+    )["time"]
+    if holes.len():
+        raise ValueError(
+            f"the weather lacks values for {holes.len()} hour(s), the first ending at "
+            f"{holes.dt.min():%Y-%m-%d %H:%M} UTC"
+        )
     middles = pd.DatetimeIndex(
         middle_of_hours(weather["time"]).dt.replace_time_zone(None).to_numpy(), tz="UTC"
     )
@@ -108,7 +117,7 @@ def production(
         plane["poa_global"], column("temperature_c"), column("wind_speed_m_s"), FAIMAN_U0, FAIMAN_U1
     )
     power = pvlib.pvarray.huld(effective, cells, pdc0=1000.0, cell_type="csi", k_version="pvgis5")
-    watts = np.clip(np.nan_to_num(np.asarray(power, dtype=float)), 0.0, None)
+    watts = np.clip(np.asarray(power, dtype=float), 0.0, None)
     return pl.DataFrame(
         {"time": weather["time"], "power_w_per_kwp": watts * (1 - LOSSES) * calibration}
     )
@@ -130,17 +139,24 @@ def quarter_hours(hourly: pl.DataFrame) -> pl.DataFrame:
 
 def calibration(ours: pl.DataFrame, pvgis: pl.DataFrame) -> tuple[pl.DataFrame, float]:
     """The energy of each orientation and month, for the model and for PVGIS, their ratio, and the
-    factor of the whole period. The model dates an hour with its end, PVGIS a few minutes after
-    its start: each hour counts in the month where it starts."""
+    factor of the whole period, over the hours both have: an hour that one of them lacks would
+    lower its side only. The model dates an hour with its end, PVGIS a few minutes after its
+    start: each hour counts in the month where it starts."""
 
-    def monthly(frame: pl.DataFrame, shift: timedelta, name: str) -> pl.DataFrame:
-        return frame.group_by(
-            "orientation", (pl.col("time") - shift).dt.truncate("1mo").alias("month")
-        ).agg((pl.col("power_w_per_kwp").sum() / 1000).alias(name))
+    def hourly(frame: pl.DataFrame, start: pl.Expr, name: str) -> pl.DataFrame:
+        return frame.select(
+            "orientation", start.alias("hour"), pl.col("power_w_per_kwp").alias(name)
+        )
 
     months = (
-        monthly(ours, timedelta(hours=1), "model_kwh")
-        .join(monthly(pvgis, timedelta(0), "pvgis_kwh"), on=["orientation", "month"])
+        hourly(ours, pl.col("time") - HOUR, "model")
+        .join(hourly(pvgis, pl.col("time").dt.truncate("1h"), "pvgis"), on=["orientation", "hour"])
+        .group_by("orientation", pl.col("hour").dt.truncate("1mo").alias("month"))
+        .agg(
+            pl.len().alias("hours"),
+            (pl.col("model").sum() / 1000).alias("model_kwh"),
+            (pl.col("pvgis").sum() / 1000).alias("pvgis_kwh"),
+        )
         .with_columns((pl.col("pvgis_kwh") / pl.col("model_kwh")).alias("ratio"))
         .sort("orientation", "month")
     )

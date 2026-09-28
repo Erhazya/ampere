@@ -2,6 +2,7 @@
 
 import io
 import json
+import math
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeGuard
@@ -92,3 +93,14 @@ def is_int(value: object) -> TypeGuard[int]:
 def is_number(value: object) -> TypeGuard[int | float]:
     """An integer or a float, and not a boolean."""
     return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def finite(value: object) -> float | None:
+    """A JSON number as a float; None for anything else, or for a number that is not finite."""
+    if not is_number(value):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float
+        return None
+    return number if math.isfinite(number) else None

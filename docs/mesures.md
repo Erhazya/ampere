@@ -40,7 +40,7 @@ Chaque chiffre publié (README, vitrine, vidéo) figure ici avec le moyen de le 
 - **Commande** : `uv run ampere ingest pvgis`, puis `uv run ampere solar check`, qui échoue quand le facteur écrit dans `ampere.solar` ne correspond plus aux données.
 - **Version du code** : l'incrément 3.1.
 - **Données** : PVGIS 5.3, rayonnements SARAH3 et météo ERA5, reçu le 28 septembre 2026 ; la météo observée d'Open-Meteo (ADR 025).
-- **Protocole** : pour chaque orientation, l'énergie de chaque mois calculée sans calage, face à celle de PVGIS pour le même toit de 1 kWc ; chaque heure compte dans le mois où elle commence. Le facteur est le rapport des énergies des six mois et des trois orientations (ADR 032).
+- **Protocole** : pour chaque orientation, l'énergie de chaque mois calculée sans calage, face à celle de PVGIS pour le même toit de 1 kWc, sur les heures que les deux ont : toutes, soit 4 416 par orientation ; chaque heure compte dans le mois où elle commence. Le facteur est le rapport des énergies des six mois et des trois orientations (ADR 032).
 - **Limites** : six mois seulement. PVGIS n'est pas une mesure, mais un calcul fait sur les rayonnements d'un satellite. L'écart d'octobre dit que les rayonnements des deux sources diffèrent aussi selon la saison, ce qu'un seul facteur ne corrige pas.
 
 ### Écart entre notre production solaire et le taux de charge régional
