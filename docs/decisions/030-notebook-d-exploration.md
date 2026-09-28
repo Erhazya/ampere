@@ -46,7 +46,7 @@ Le plan du projet termine l'étape 2 par un premier notebook d'exploration : un 
 L'auteur a choisi le 28 septembre 2026 l'option 1 de chaque choix, et les quatre thèmes proposés.
 
 - **Outil** : `notebooks/exploration.ipynb`, avec ses sorties dans le dépôt. Une commande le réexécute de haut en bas avant chaque commit, ce qui écarte l'état caché. Jupyter et matplotlib sont dans un groupe de dépendances à part, `notebooks`, que ni la CI ni l'image de la démo n'installent.
-- **Garde-fou** : `ampere.data.periods` définit la période de test en heure de Paris, et `scan()` lit une table du nettoyé sur une plage donnée, après avoir refusé toute plage qui touche la période de test. Tout code d'analyse lit le nettoyé par cette fonction ; seule l'évaluation finale, à l'étape 5, aura un accès à part.
+- **Garde-fou** : `ampere.data.periods` définit la période de test en heure de Paris, et `scan()` lit une table du nettoyé sur une plage donnée, après avoir refusé toute plage qui touche la période de test, puis une colonne qui ne tient pas ce que sont les bornes : des jours de Paris sur une colonne d'instants UTC seraient lus à minuit UTC, deux heures après le début du jour. Tout code d'analyse lit le nettoyé par cette fonction ; seule l'évaluation finale, à l'étape 5, aura un accès à part.
 - **Période** : du 1er juillet 2023 au 30 juin 2025, heure de Paris.
 - **Thèmes** :
   1. la couverture et la qualité de chaque source : dates, pas de temps, versions, trous, changements d'heure ;

@@ -105,3 +105,28 @@ def test_refuses_a_range_it_cannot_place(
 ) -> None:
     with pytest.raises((TypeError, ValueError), match=message):
         scan(table, "start", start, end)
+
+
+@pytest.mark.parametrize(
+    ("column", "start", "end", "message"),
+    [
+        # Paris days on a column of instants: Polars would read them as midnight UTC, two hours
+        # into the test period.
+        ("start", date(2025, 6, 1), TEST_FIRST_DAY, "not days"),
+        ("day", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "not UTC instants"),
+        ("value", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "not UTC instants"),
+        ("missing", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "no column"),
+    ],
+)
+def test_refuses_a_column_of_another_kind_than_its_bounds(
+    table: Path, column: str, start: datetime | date, end: datetime | date, message: str
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        scan(table, column, start, end)
+
+
+def test_refuses_instants_without_the_utc_time_zone(tmp_path: Path) -> None:
+    path = tmp_path / "naive.parquet"
+    pl.DataFrame({"start": [datetime(2025, 1, 1)]}).write_parquet(path)
+    with pytest.raises(TypeError, match="not UTC instants"):
+        scan(path, "start", datetime(2025, 1, 1, tzinfo=UTC), TEST_START)
