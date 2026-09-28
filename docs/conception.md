@@ -421,7 +421,7 @@ Tout le traitement des données est écrit en Python ; le tableau de bord, en Ty
 
 Les modèles entraînés sont livrés au traitement quotidien sous forme de fichiers versionnés. Le mode de livraison sera choisi à l'étape 5.
 
-### 8.3 Le traitement quotidien *(ADR 011)*
+### 8.3 Le traitement quotidien *(ADR 011 et 028)*
 
 Un minuteur systemd lance chaque jour à **14 h (heure de Paris)** un conteneur qui exécute, dans l'ordre :
 
@@ -432,7 +432,7 @@ Un minuteur systemd lance chaque jour à **14 h (heure de Paris)** un conteneur 
 5. **Plus tard, le plan des batteries pour le lendemain**, calculé à partir des prévisions et des prix (MPC).
 6. **Export des résultats** pour l'API.
 
-Le traitement est idempotent : le relancer ne change rien. L'option `Persistent` du minuteur relance une exécution manquée dès le redémarrage du serveur. Chaque trimestre, la publication Enedis transforme les jours « estimés » en jours réels, et les jours concernés sont recalculés.
+Le traitement est idempotent : le relancer ne change rien. L'option `Persistent` du minuteur relance une exécution manquée dès le redémarrage du serveur. Depuis le 28 septembre 2026, ce minuteur est `demo-daily@ampere.timer`, dans la plateforme des démos du socle : il lance le service `daily` de `deploy/compose.yaml` sur l'image que la démo sert, et chaque source y tourne dans un processus à part (ADR 028). L'ingestion est la seule étape écrite à ce jour. Chaque trimestre, la publication Enedis transforme les jours « estimés » en jours réels, et les jours concernés sont recalculés.
 
 ### 8.4 Les données *(ADR 022)*
 
@@ -462,7 +462,7 @@ ampere/
 ├── web/             # tableau de bord React + TypeScript
 ├── tests/           # tests Python
 ├── notebooks/       # analyses qui racontent les résultats
-├── deploy/          # Dockerfile, Compose, minuteur systemd
+├── deploy/          # Dockerfile, Compose et leurs essais ; le minuteur est dans le socle
 ├── docs/            # conception, décisions, mesures, glossaire
 ├── pyproject.toml   # projet Python (uv)
 └── uv.lock          # versions exactes des dépendances

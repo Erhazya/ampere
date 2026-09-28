@@ -1,6 +1,6 @@
 # ADR 011 : traitement quotidien lancé par un minuteur systemd sur le VPS
 
-- **Statut** : acceptée
+- **Statut** : acceptée ; précisée par l'[ADR 028](028-traitement-quotidien-en-ligne.md) : le minuteur est celui de la plateforme des démos du socle, et la supervision reste à venir
 - **Date** : 23 septembre 2026
 
 ## Contexte
