@@ -183,7 +183,7 @@ def days(**first: Any) -> list[dict[str, Any]]:
     """The nine Paris days of the period, the first one changed as asked."""
     return [
         {
-            "day": f"2026-09-{21 + n}",
+            "day": f"2026-09-{22 + n}",
             "start": 1_790_028_000_000 + n * DAY,
             "end": 1_790_028_000_000 + (n + 1) * DAY,
             "public_holiday": None,
