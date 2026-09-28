@@ -13,6 +13,9 @@ log = logging.getLogger("ampere")
 
 # The sources, in the order of the daily job (ADR 028).
 SOURCES = ("smard", "eco2mix", "openmeteo", "enedis", "calendars")
+# The steps of the daily job, each named and run as an ampere command: the sources, then the
+# export of the Data screen (ADR 028 and 029).
+STEPS = (*((name, ("ingest", name)) for name in SOURCES), ("export", ("export",)))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,9 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     commands.add_parser(
+        "export",
+        help="write exports/recent.json, the recent days the Data screen shows, from the clean "
+        "tables (ADR 029)",
+    )
+    commands.add_parser(
         "daily",
-        help="ingest every source in turn, without --full, as the online demo does every day; "
-        "a source that fails leaves the next ones their turn, and the exit status 1",
+        help="ingest every source in turn, without --full, then write the export, as the online "
+        "demo does every day; a step that fails leaves the next ones their turn, and the exit "
+        "status 1",
     )
     return parser
 
@@ -72,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         return init_data()
     if args.command == "ingest":
         return ingest_source(args.source, full=args.full)
+    if args.command == "export":
+        return export()
     if args.command == "daily":
         return daily()
     if args.command == "api":
@@ -137,8 +148,22 @@ def ingest_source(name: str, *, full: bool) -> int:
     return 1 if report.failed else 0
 
 
+def export() -> int:
+    """Write the export of the Data screen from the clean tables (ADR 029)."""
+    from ampere.data.folders import data_root
+    from ampere.exports import write_export
+
+    report = write_export(data_root(), datetime.now(UTC))
+    for warning in report.warnings:
+        log.warning("%s", warning)
+    for error in report.errors:
+        log.error("%s", error)
+    return 1 if report.failed else 0
+
+
 def daily() -> int:
-    """Ingest every source in turn, as the daily job of the demo does (ADR 028)."""
+    """Ingest every source in turn, then write the export, as the daily job of the demo does
+    (ADR 028 and 029)."""
     from ampere.data.folders import data_root
     from ampere.data.raw import RawStore
 
@@ -148,23 +173,21 @@ def daily() -> int:
         log.error("%s", error)
         return 1
     failed = []
-    for name in SOURCES:
-        status = ingest_apart(name)
+    for name, args in STEPS:
+        status = run_apart(*args)
         if status < 0:
             log.error("%s: killed by signal %d", name, -status)
         if status:
             failed.append(name)
     if failed:
-        log.error(
-            "daily: %d of %d sources failed: %s", len(failed), len(SOURCES), ", ".join(failed)
-        )
+        log.error("daily: %d of %d steps failed: %s", len(failed), len(STEPS), ", ".join(failed))
         return 1
-    log.info("daily: the %d sources are ingested", len(SOURCES))
+    log.info("daily: the %d sources are ingested and the export is written", len(SOURCES))
     return 0
 
 
-def ingest_apart(name: str) -> int:
-    """Run `ampere ingest <name>` in a process of its own, and return its exit status: negative
-    when a signal killed it. A source that the kernel kills for lack of memory, or that Polars
-    aborts, stops only its own process, and the next sources keep their turn."""
-    return subprocess.run([sys.executable, "-m", "ampere", "ingest", name], check=False).returncode
+def run_apart(*args: str) -> int:
+    """Run `ampere <args>` in a process of its own, and return its exit status: negative when a
+    signal killed it. A step that the kernel kills for lack of memory, or that Polars aborts,
+    stops only its own process, and the next steps keep their turn."""
+    return subprocess.run([sys.executable, "-m", "ampere", *args], check=False).returncode

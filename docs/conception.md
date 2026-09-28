@@ -430,7 +430,7 @@ Un minuteur systemd lance chaque jour à **14 h (heure de Paris)** un conteneur 
 3. **Simulation de la veille** pour chaque stratégie : règle simple et MILP en information parfaite.
 4. **Prévision de la consommation du lendemain.** Elle est calculée à 14 h, mais n'utilise que l'information disponible à 11 h (section 7.2).
 5. **Plus tard, le plan des batteries pour le lendemain**, calculé à partir des prévisions et des prix (MPC).
-6. **Export des résultats** pour l'API.
+6. **Export des résultats** pour l'API. Le premier, depuis le 28 septembre 2026, est celui de l'écran « Data » : les derniers jours de chaque série, dans `exports/recent.json` (ADR 029).
 
 Le traitement est idempotent : le relancer ne change rien. L'option `Persistent` du minuteur relance une exécution manquée dès le redémarrage du serveur. Depuis le 28 septembre 2026, ce minuteur est `demo-daily@ampere.timer`, dans la plateforme des démos du socle : il lance le service `daily` de `deploy/compose.yaml` sur l'image que la démo sert, et chaque source y tourne dans un processus à part (ADR 028). L'ingestion est la seule étape écrite à ce jour. Chaque trimestre, la publication Enedis transforme les jours « estimés » en jours réels, et les jours concernés sont recalculés.
 

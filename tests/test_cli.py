@@ -314,49 +314,59 @@ def test_a_failed_ingestion_goes_up_instead_of_exiting_with_0(
 
 def fake_processes(
     monkeypatch: pytest.MonkeyPatch, statuses: dict[str, int | BaseException] | None = None
-) -> list[str]:
-    """Replace the process of each source with a fake that records its turn, then returns its
-    exit status or raises its exception: 0 unless statuses says otherwise."""
-    turns: list[str] = []
+) -> list[tuple[str, ...]]:
+    """Replace the process of each step with a fake that records its arguments, then returns its
+    exit status or raises its exception: 0 unless statuses says otherwise, by the last argument."""
+    turns: list[tuple[str, ...]] = []
 
-    def ingest_apart(name: str) -> int:
-        turns.append(name)
-        outcome = (statuses or {}).get(name, 0)
+    def run_apart(*args: str) -> int:
+        turns.append(args)
+        outcome = (statuses or {}).get(args[-1], 0)
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(cli, "ingest_apart", ingest_apart)
+    monkeypatch.setattr(cli, "run_apart", run_apart)
     return turns
 
 
-def test_daily_ingests_every_source_in_turn(
+STEPS = [
+    ("ingest", "smard"),
+    ("ingest", "eco2mix"),
+    ("ingest", "openmeteo"),
+    ("ingest", "enedis"),
+    ("ingest", "calendars"),
+    ("export",),
+]
+
+
+def test_daily_ingests_every_source_in_turn_then_writes_the_export(
     monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="ampere")
     turns = fake_processes(monkeypatch)
     assert cli.main(["daily"]) == 0
-    assert turns == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
-    assert "daily: the 5 sources are ingested" in caplog.text
+    assert turns == STEPS
+    assert "daily: the 5 sources are ingested and the export is written" in caplog.text
 
 
-def test_daily_goes_on_after_a_source_that_fails(
+def test_daily_goes_on_after_a_step_that_fails(
     monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # 1 for an error or an exception of the source, -9 when the kernel kills it, often for lack
-    # of memory.
-    turns = fake_processes(monkeypatch, {"smard": 1, "enedis": -9})
+    # 1 for an error or an exception of the step, -9 when the kernel kills it, often for lack of
+    # memory.
+    turns = fake_processes(monkeypatch, {"smard": 1, "enedis": -9, "export": 1})
     assert cli.main(["daily"]) == 1
-    assert turns == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
+    assert turns == STEPS
     assert ("ampere", logging.ERROR, "enedis: killed by signal 9") in caplog.record_tuples
-    assert "daily: 2 of 5 sources failed: smard, enedis" in caplog.text
+    assert "daily: 3 of 6 steps failed: smard, enedis, export" in caplog.text
 
 
 def test_daily_stops_when_it_is_interrupted(monkeypatch: pytest.MonkeyPatch, data: Path) -> None:
     turns = fake_processes(monkeypatch, {"eco2mix": KeyboardInterrupt()})
     with pytest.raises(KeyboardInterrupt):
         cli.main(["daily"])
-    assert turns == ["smard", "eco2mix"]
+    assert turns == STEPS[:2]
 
 
 def test_daily_needs_a_raw_layer_created_first(
@@ -371,17 +381,48 @@ def test_daily_needs_a_raw_layer_created_first(
     assert not (tmp_path / "unmounted").exists()
 
 
-def test_each_source_runs_as_ampere_ingest_without_full(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_each_step_runs_as_the_ampere_command(monkeypatch: pytest.MonkeyPatch) -> None:
     run = Mock(return_value=subprocess.CompletedProcess([], 1))
     monkeypatch.setattr(subprocess, "run", run)
-    assert cli.ingest_apart("enedis") == 1
+    assert cli.run_apart("ingest", "enedis") == 1
     run.assert_called_once_with([sys.executable, "-m", "ampere", "ingest", "enedis"], check=False)
 
 
-def test_a_source_runs_in_a_process_of_its_own(
+def test_a_step_runs_in_a_process_of_its_own(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     # A real process, which stops on the missing raw layer before any request.
     monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
-    assert cli.ingest_apart("smard") == 1
+    assert cli.run_apart("ingest", "smard") == 1
     assert "check AMPERE_DATA and its volume" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("report", "status"),
+    [
+        (Report(), 0),
+        (Report(warnings=["clean/openmeteo/weather.parquet is missing"]), 0),
+        (Report(errors=["the export is not written: 1 values refused, in price"]), 1),
+    ],
+    ids=["clean", "a warning", "an error"],
+)
+def test_export_writes_the_export_of_the_data_folder(
+    monkeypatch: pytest.MonkeyPatch,
+    data: Path,
+    caplog: pytest.LogCaptureFixture,
+    report: Report,
+    status: int,
+) -> None:
+    calls: list[tuple[Path, datetime]] = []
+
+    def write_export(root: Path, now: datetime) -> Report:
+        calls.append((root, now))
+        return report
+
+    monkeypatch.setattr("ampere.exports.write_export", write_export)
+    assert cli.main(["export"]) == status
+    ((root, now),) = calls
+    assert root == data and now.utcoffset() == timedelta(0)
+    assert abs(datetime.now(UTC) - now) < timedelta(minutes=1)
+    for message in [*report.warnings, *report.errors]:
+        assert message in caplog.text
