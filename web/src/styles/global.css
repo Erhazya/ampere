@@ -11,6 +11,10 @@
   --amber: #f2b84b;
   --status-up: #6fd6a8;
   --status-down: #ff7a55;
+  /* The two series of the charts, validated for the dark ground: a measured or published value,
+     and a forecast (dataviz skill, ADR 029). */
+  --series-measured: #c98500;
+  --series-forecast: #3987e5;
   --font-display: 'Archivo', 'Arial Narrow', sans-serif;
   --font-sans: 'Geist', system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;

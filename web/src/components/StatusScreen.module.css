@@ -1,0 +1,17 @@
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.title {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 34px;
+}
+
+.intro {
+  max-width: 520px;
+  line-height: 22px;
+  color: var(--ink-soft);
+}

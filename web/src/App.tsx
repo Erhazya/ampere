@@ -1,21 +1,20 @@
-import { useApiHealth } from './api/useApiHealth';
+import { useEffect } from 'react';
 import styles from './App.module.css';
-import { ApiStatusCard } from './components/ApiStatusCard';
+import { DataScreen } from './components/DataScreen';
+import { StatusScreen } from './components/StatusScreen';
 import { TopBar } from './components/TopBar';
 import { TEXT } from './text';
+import { useScreen } from './useScreen';
 
 export default function App() {
-  const health = useApiHealth();
+  const screen = useScreen();
+  useEffect(() => {
+    document.title = `${screen === 'data' ? TEXT.data.title : TEXT.statusTitle} · Ampère`;
+  }, [screen]);
   return (
     <div className={styles.app}>
-      <TopBar />
-      <main className={styles.main}>
-        <div className={styles.heading}>
-          <h1 className={styles.title}>{TEXT.statusTitle}</h1>
-          <p className={styles.intro}>{TEXT.statusIntro}</p>
-        </div>
-        <ApiStatusCard health={health} />
-      </main>
+      <TopBar screen={screen} />
+      <main className={styles.main}>{screen === 'data' ? <DataScreen /> : <StatusScreen />}</main>
     </div>
   );
 }

@@ -1,0 +1,54 @@
+.scroll {
+  max-height: 560px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.scroll:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.caption {
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-align: left;
+}
+
+.table th,
+.table td {
+  padding: 6px 12px 6px 0;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  font-weight: 500;
+  background: var(--ground);
+}
+
+.table th[scope='row'],
+.table thead th:first-child {
+  text-align: left;
+}
+
+.table td,
+.table th[scope='row'] {
+  font-family: var(--font-mono);
+}
+
+.unit {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+}
