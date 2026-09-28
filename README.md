@@ -2,7 +2,7 @@
 
 A digital twin of a 200-house neighbourhood's energy, fed with real public French data.
 
-> **Status: work in progress.** The design and the foundations are done. The data pipeline is under way: every day at 14:00, Paris time, the server fetches and checks five sources, and keeps each raw response as received. A first screen is online at <https://ampere.146-19-168-222.sslip.io>: the last seven days and tomorrow of the spot price, consumption and RTE's forecast, carbon intensity, regional solar output and temperature in Lyon, updated every day.
+> **Status: work in progress.** The design, the foundations and the data pipeline are done: every day at 14:00, Paris time, the server fetches and checks five sources, and keeps each raw response as received. An [exploration notebook](notebooks/exploration.ipynb), in French, shows what the data says. A first screen is online at <https://ampere.146-19-168-222.sslip.io>: the last seven days and tomorrow of the spot price, consumption and RTE's forecast, carbon intensity, regional solar output and temperature in Lyon, updated every day.
 
 [Version française](README.fr.md)
 
@@ -33,7 +33,7 @@ The full reasoning is in the design document and the architecture decision recor
 |---|---|---|
 | 0 | Design | Done |
 | 1 | Foundations: repository, CI, deployed skeleton | Done |
-| 2 | Data: daily ingestion and quality checks | In progress |
+| 2 | Data: daily ingestion and quality checks | Done |
 | 3 | Simulation: houses, solar panels, batteries | To do |
 | 4 | Control: simple rule vs MILP | To do |
 | 5 | Forecasts: naive baselines vs LightGBM | To do |

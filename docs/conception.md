@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 et 2 (ADR 012 à 023).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 et 2 (ADR 012 à 030).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 
@@ -130,7 +130,7 @@ Le tirage au sort utilise une graine fixe : le même quartier est reconstruit à
 
 **Du pas de 30 min au pas de 15 min** *(ADR 005)*. La simulation tourne au pas de 15 min, mais Enedis publie au pas de 30 min. Chaque demi-heure devient donc deux quarts d'heure de même puissance, ce qui conserve exactement l'énergie mesurée ; la variabilité par foyer ajoute ensuite le détail. Les prévisions de consommation sont notées sur des sommes de 30 min, le pas des vraies données, pour ne jamais noter du détail inventé.
 
-**Jours récents.** Enedis publie chaque trimestre, environ un mois après la fin du trimestre. Pour les jours pas encore publiés, dont « hier », le jumeau estime la consommation avec un modèle calé sur l'historique Enedis, à partir de la température observée et du calendrier. Ces jours sont marqués « estimés » dans les données et dans l'interface. Ils ne servent jamais à évaluer les prévisions : les prévisions sont évaluées uniquement sur des données publiées par Enedis.
+**Jours récents.** Enedis publie chaque trimestre, environ un mois après la fin du trimestre. Sur juillet 2023 à juin 2025, une droite brisée de la température, avec un seuil vers 15 °C, explique 93 % des écarts d'un jour à l'autre de la consommation moyenne d'un foyer de la région (notebook d'exploration, ADR 030). Pour les jours pas encore publiés, dont « hier », le jumeau estime la consommation avec un modèle calé sur l'historique Enedis, à partir de la température observée et du calendrier. Ces jours sont marqués « estimés » dans les données et dans l'interface. Ils ne servent jamais à évaluer les prévisions : les prévisions sont évaluées uniquement sur des données publiées par Enedis.
 
 **Archivage.** Enedis ne garde en ligne qu'une fenêtre glissante, de juillet 2023 à juin 2026 au 23 septembre 2026 : chaque publication est archivée telle quelle dès sa sortie.
 
@@ -255,7 +255,7 @@ Chaque source a été vérifiée le 23 septembre 2026, dans sa documentation off
 #### Enedis, consommation des foyers *(ADR 001 et 026)*
 
 - **Contenu** ([conso-inf36-region](https://opendata.enedis.fr/datasets/conso-inf36-region/)) : pour chaque demi-heure, chaque région, chaque profil et chaque tranche de puissance souscrite, le nombre de foyers, l'énergie totale consommée et la courbe moyenne d'un foyer.
-- **En Auvergne-Rhône-Alpes** : 82 segments. Les profils résidentiels sont RES1, RES11, RES2, RES2WE, RES3 et RES4 ; leur sens exact sera documenté à l'étape 2. Les tranches vont de 0-3 kVA à 30-36 kVA, certaines regroupées.
+- **En Auvergne-Rhône-Alpes** : 82 segments. Les profils résidentiels suivent l'option tarifaire du foyer, d'après le dictionnaire des profils d'Enedis : RES1 et RES11 le tarif base, de 6 kVA ou moins et de plus de 6 kVA, RES2 les heures pleines et heures creuses, RES2WE la même chose avec un tarif du week-end, RES3 l'option Tempo et RES4 l'ancienne option EJP ; RES1WE, RES11WE et RES5 sont publiés avec RES1, RES11 et RES2 (notebook d'exploration, ADR 030). Les tranches vont de 0-3 kVA à 30-36 kVA, certaines regroupées.
 - **Historique et rythme** : de juillet 2023 à juin 2026, en fenêtre glissante, soit environ 4,3 millions de lignes pour la région. La dernière publication date du 30 juillet 2026 ; la suivante est attendue fin octobre 2026.
 - **Accès** : API sans clé. Le portail a changé de plateforme : l'ancienne API, compatible avec celle d'ODRÉ, survit pour les lignes et les exports, Parquet compris, et l'API native donne les métadonnées, dont la date de la dernière publication (ADR 026).
 - **Champs** : le nombre de sites, l'énergie totale, modélisée pour les sites sans courbe relevée, et trois courbes moyennes des sites à compteur communicant. Les courbes n° 1 et n° 2 partagent ces sites en deux moitiés selon la part de leur consommation entre 8 h et 20 h ; la courbe n° 1 + n° 2, la courbe globale, les réunit. L'indice de représentativité est la part des sites du segment qu'une courbe représente.
@@ -520,6 +520,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [027](decisions/027-ingestion-des-calendriers.md) | Ingestion des calendriers | Acceptée |
 | [028](decisions/028-traitement-quotidien-en-ligne.md) | Le traitement quotidien en ligne | Acceptée |
 | [029](decisions/029-ecran-data.md) | L'écran « Data » : export quotidien, API et graphiques empilés | Acceptée |
+| [030](decisions/030-notebook-d-exploration.md) | Le notebook d'exploration : Jupyter, et un garde-fou pour la période de test | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
@@ -532,8 +533,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 
 | Question | Quand |
 |---|---|
-| Sens exact des profils résidentiels d'Enedis | Étape 2 |
-| Modèle d'estimation des jours récents : lequel, et comment le valider ? | Étapes 2 et 3 |
+| Modèle d'estimation des jours récents : lequel, et comment le valider ? La température et le calendrier, peut-être la consommation nationale de RTE (notebook d'exploration) | Étape 3 |
 | Méthode et paramètres de la variabilité par foyer | Étape 3 |
 | Valeurs par défaut des équipements (part des toits équipés, tailles des batteries) et leurs sources | Étape 3 |
 | Montants de la facture (acheminement, accise, TVA, tarif d'achat), relevés et datés | Étape 4 |
