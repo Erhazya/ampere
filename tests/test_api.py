@@ -1,8 +1,10 @@
 """The HTTP API, tested in memory with FastAPI's test client."""
 
+import json
 import mimetypes
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +12,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 
 import ampere
 from ampere.api import create_app
+from ampere.recent import EXPORT, MAX_BYTES
 
 HEALTH = {"status": "ok", "version": ampere.__version__}
 
@@ -142,3 +145,103 @@ def test_the_dashboard_files_change_no_api_answer(
     for header in ["allow", "location", "content-type", "cache-control"]:
         assert served.headers.get(header) == alone.headers.get(header)
     assert served.content == alone.content
+
+
+def export(**changes: Any) -> bytes:
+    """A small export of the recent days, of the shape of ADR 029."""
+    content = {
+        "generated_at": 1_790_596_000_000,
+        "start": 1_790_028_000_000,
+        "end": 1_790_805_600_000,
+        "series": [
+            {
+                "id": "price",
+                "source": "smard",
+                "unit": "EUR/MWh",
+                "points": [[1_790_028_000_000, 81.5], [1_790_028_900_000, -3]],
+            }
+        ],
+        "days": [{"day": "2026-09-21", "public_holiday": None, "school_holidays": None}],
+        "sources": [
+            {
+                "id": "smard",
+                "name": "Bundesnetzagentur | SMARD.de",
+                "licence": "CC BY 4.0",
+                "updated_at": None,
+                "received_at": 1_790_596_000_000,
+            }
+        ],
+    }
+    return json.dumps({**content, **changes}).encode()
+
+
+@pytest.fixture
+def exported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Where the daily job writes the export, in a data folder of its own."""
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path))
+    (tmp_path / EXPORT).parent.mkdir()
+    return tmp_path / EXPORT
+
+
+def test_the_recent_days_are_served_as_the_daily_job_exported_them(
+    client: TestClient, exported: Path
+) -> None:
+    exported.write_bytes(export())
+    response = client.get("/api/data/recent")
+    assert response.status_code == 200
+    assert response.content == export()
+    assert response.headers["content-type"] == "application/json"
+    # The browser asks again at each visit, and downloads the export only when it changed.
+    assert response.headers["cache-control"] == "no-cache"
+    etag = response.headers["etag"]
+    again = client.get("/api/data/recent", headers={"If-None-Match": etag})
+    assert (again.status_code, again.content) == (304, b"")
+    assert again.headers["etag"] == etag
+    exported.write_bytes(export(generated_at=1_790_682_400_000))
+    changed = client.get("/api/data/recent", headers={"If-None-Match": etag})
+    assert changed.status_code == 200 and changed.headers["etag"] != etag
+
+
+def test_without_an_export_the_recent_days_are_unavailable(
+    client: TestClient, exported: Path
+) -> None:
+    response = client.get("/api/data/recent")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "No export of the recent days yet"}
+
+
+@pytest.mark.parametrize(
+    ("body", "why"),
+    [
+        (b"not json", "breaks the shape"),
+        (export(extra=1), "breaks the shape"),
+        (
+            export(
+                series=[{"id": "price", "source": "smard", "unit": "EUR/MWh", "points": [[1, 2]]}]
+            ),
+            "breaks the shape",
+        ),
+        (
+            export(
+                days=[{"day": "2026-09-21", "public_holiday": "x" * 101, "school_holidays": None}]
+            ),
+            "breaks the shape",
+        ),
+        (export().replace(b"81.5", b"NaN"), "breaks the shape"),
+        (b" " * MAX_BYTES + export(), f"is larger than {MAX_BYTES} bytes"),
+    ],
+    ids=["not JSON", "an unknown field", "an instant before 2000", "a long name", "NaN", "too big"],
+)
+def test_an_export_of_another_shape_is_not_served(
+    client: TestClient,
+    exported: Path,
+    caplog: pytest.LogCaptureFixture,
+    body: bytes,
+    why: str,
+) -> None:
+    exported.write_bytes(body)
+    response = client.get("/api/data/recent")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "The export of the recent days is unusable"}
+    # The log says which file, and why.
+    assert f"{exported} {why}" in caplog.text

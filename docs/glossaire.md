@@ -82,7 +82,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **BuildKit** : le moteur actuel de `docker build`, celui de la CI. Le Docker rootless du VPS, sans l'extension buildx, utilise encore l'ancien constructeur, qui ne lit que le `.dockerignore` placé à la racine du contexte (ADR 020).
 
-**Cache du navigateur** : copies des réponses que le navigateur garde pour ne pas les redemander. Avec l'en-tête `Cache-Control: no-cache`, il revérifie la page auprès du serveur à chaque visite, en envoyant l'empreinte de sa copie (l'ETag), et le serveur répond 304 si elle n'a pas changé. Les fichiers de `assets/` du build ont un nom qui change avec leur contenu : le navigateur peut les garder sans risque. Les autres, la page comprise, sont revérifiés à chaque visite (ADR 018).
+**Cache du navigateur** : copies des réponses que le navigateur garde pour ne pas les redemander. Avec l'en-tête `Cache-Control: no-cache`, il revérifie la page auprès du serveur à chaque visite, en envoyant l'empreinte de sa copie (l'ETag), et le serveur répond 304 si elle n'a pas changé. Les fichiers de `assets/` du build ont un nom qui change avec leur contenu : le navigateur peut les garder sans risque. Les autres, la page comprise, sont revérifiés à chaque visite (ADR 018). L'API fait de même pour l'export de l'écran « Data » : son ETag est l'empreinte SHA-256 du fichier, et le navigateur ne le retélécharge qu'après le traitement du jour (ADR 029).
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
 
