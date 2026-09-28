@@ -150,6 +150,7 @@ Le tirage au sort utilise une graine fixe : le même quartier est reconstruit à
 - **Méthode** : calculer la production de chaque toit à partir de l'ensoleillement observé à Lyon (données Open-Meteo) et des caractéristiques du toit, avec pvlib, la bibliothèque Python de référence pour ce calcul.
 - **PVGIS**, l'outil solaire de la Commission européenne, ne couvre que les années 2005 à 2023 : il ne peut pas fournir les jours récents. Il servira à caler le calcul, en comparant les productions annuelles.
 - **Validation** : Enedis publie aussi la production réelle des petites installations solaires de la région, par demi-heure. On comparera notre calcul à ces courbes, ramenées à 1 kWc.
+- **Mise en œuvre** (ADR 032) : les toits sont orientés au sud-est, au sud ou au sud-ouest, à 30°. pvlib reprend les modèles de PVGIS, et un facteur de 0,954 le cale sur PVGIS de juillet à décembre 2023 ; face au solaire de la région publié par éCO2mix, la corrélation heure par heure vaut 0,93 sur la mise au point (`docs/mesures.md`).
 
 ### 5.5 Le prix et la facture *(ADR 003)*
 

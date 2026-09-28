@@ -48,6 +48,6 @@ L'auteur a choisi l'option 1 le 28 septembre 2026. Le reste suit l'ADR 006, au p
 ## Conséquences
 
 - PVGIS devient la sixième source du projet, à citer : « PVGIS, Commission européenne (JRC) ».
-- L'image grossit de pvlib, pandas, SciPy et h5py. Sa taille est mesurée et reportée dans `docs/mesures.md`.
+- L'image grossit de pvlib, pandas, SciPy et h5py : 931 Mo au lieu de 467 Mo (`docs/mesures.md`). Si ce poids gêne, les quatre modèles utilisés pourraient être repris de pvlib, sous sa licence BSD, avec NumPy seul.
 - Le calage repose sur six mois seulement. Un facteur qui s'écarterait de plus de 10 % de 1 signalerait un défaut du calcul plutôt qu'un écart de rayonnement.
 - Le même calcul servira aux prévisions de production du lendemain, avec la météo prévue (étape 5).
