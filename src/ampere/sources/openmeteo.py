@@ -10,7 +10,6 @@ each run, and checks it.
 
 import json
 import logging
-import math
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
@@ -25,7 +24,7 @@ from ampere.data.clean import Report, instants_per_day, write_parquet
 from ampere.data.days import day_bounds, every_day, paris_day, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 from ampere.sources.archive import PAUSE, SINCE, fetch_json
-from ampere.sources.shapes import SchemaError, is_int, is_number, load_json
+from ampere.sources.shapes import SchemaError, finite, is_int, load_json
 
 log = logging.getLogger(__name__)
 
@@ -394,17 +393,6 @@ def parse(content: bytes, request: Request, url: str) -> Values:
                 )
             found.append((moment, number))
     return values
-
-
-def finite(value: object) -> float | None:
-    """A JSON number as a float; None for anything else, or for a number that is not finite."""
-    if not is_number(value):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:  # an integer too large for a float
-        return None
-    return number if math.isfinite(number) else None
 
 
 def build(plan: Iterable[tuple[Request, Held]]) -> pl.DataFrame:

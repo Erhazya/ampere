@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "httpx2>=2.13.1",
     "polars>=1.44.2",
+    "pvlib>=0.16.1",
     "uvicorn>=0.53.0",
 ]
 
@@ -35,6 +36,12 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
+
+# pvlib and pandas, which pvlib needs, publish no types: they are used only at the edge of
+# ampere.solar (ADR 032).
+[[tool.mypy.overrides]]
+module = ["pvlib", "pvlib.*", "pandas", "pandas.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

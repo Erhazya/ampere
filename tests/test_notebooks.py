@@ -1,5 +1,5 @@
 """The notebooks as they are in the repository: the CI has no data to run them, so it checks what
-they hold (ADR 030)."""
+they hold (ADR 030). The modules that analyse the data follow their rule of reading."""
 
 import json
 import re
@@ -63,3 +63,14 @@ def test_its_outputs_show_no_warning_and_nothing_of_the_server(path: Path) -> No
         if not kind.startswith("image/")
     ]
     assert SERVER.findall(json.dumps(texts, ensure_ascii=False)) == []
+
+
+# The modules of the package that analyse the clean layer, held to the rule of the notebooks.
+ANALYSES = [Path(__file__).parents[1] / "src" / "ampere" / "solar.py"]
+
+
+@pytest.mark.parametrize("path", ANALYSES, ids=lambda path: path.name)
+def test_the_analyses_of_the_package_read_the_data_through_the_guard_only(path: Path) -> None:
+    code = path.read_text(encoding="utf-8")
+    assert "from ampere.data.periods import scan" in code
+    assert DIRECT_READS.findall(code) == []

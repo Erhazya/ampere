@@ -42,6 +42,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Thermosensibilité** : ce que la consommation gagne quand la température baisse d'un degré. Pour un foyer d'Auvergne-Rhône-Alpes, elle est nulle au-dessus de 15 °C environ, puis vaut 42 W par degré, environ 1 kWh par jour, sur juillet 2023 à juin 2025 (notebook d'exploration).
 
+**Transposition** : le calcul du rayonnement que reçoit un plan incliné, un toit, à partir de celui que mesure un plan horizontal. Le soleil direct se projette par la géométrie ; le diffus, qui vient de tout le ciel, demande un modèle. Ampère utilise celui de Perez, par pvlib (ADR 032).
+
 **Vente du surplus** : mode de raccordement où la maison consomme d'abord sa production solaire et ne vend que le reste. Son injection sur le réseau est donc sa production moins sa consommation.
 
 **Zones de vacances scolaires** : la métropole est partagée en trois zones, A, B et C, dont les vacances d'hiver et de printemps sont décalées d'une ou deux semaines, pour étaler les départs. Lyon est en zone A, avec sept autres académies qui ont les mêmes vacances (ADR 027).

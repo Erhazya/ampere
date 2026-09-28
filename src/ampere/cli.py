@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import math
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -13,6 +14,8 @@ log = logging.getLogger("ampere")
 
 # The sources, in the order of the daily job (ADR 028).
 SOURCES = ("smard", "eco2mix", "openmeteo", "enedis", "calendars")
+# The sources asked for once, archives that no longer change: never in the daily job (ADR 032).
+ARCHIVES = ("pvgis",)
 # The steps of the daily job, each named and run as an ampere command: the sources, then the
 # export of the Data screen (ADR 028 and 029).
 STEPS = (*((name, ("ingest", name)) for name in SOURCES), ("export", ("export",)))
@@ -49,19 +52,27 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = commands.add_parser(
         "ingest", help="fetch a source into the raw layer, then rebuild and check its clean data"
     )
-    ingest.add_argument("source", choices=SOURCES)
+    ingest.add_argument("source", choices=(*SOURCES, *ARCHIVES))
     ingest.add_argument(
         "--full",
         action="store_true",
         help="ask again for the whole history since 1 July 2023, not only what can still change "
         "(about 170 requests for SMARD, 82 for éCO2mix, 970 for Open-Meteo, 80 for Enedis); "
-        "the calendars are always asked for whole",
+        "the calendars and PVGIS are always asked for whole",
     )
 
     commands.add_parser(
         "export",
         help="write exports/recent.json, the recent days the Data screen shows, from the clean "
         "tables (ADR 029)",
+    )
+    solar = commands.add_parser("solar", help="the solar model of the roofs (ADR 032)")
+    solar_commands = solar.add_subparsers(dest="solar_command", required=True)
+    solar_commands.add_parser(
+        "check",
+        help="compare the model with PVGIS from July to December 2023, and with the solar of the "
+        "region from July 2023 to June 2025; the exit status is 1 when the calibration factor of "
+        "the code no longer matches the data",
     )
     commands.add_parser(
         "daily",
@@ -85,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         return export()
     if args.command == "daily":
         return daily()
+    if args.command == "solar":
+        return solar_check()
     if args.command == "api":
         # Imported here, so that other commands start fast.
         import uvicorn
@@ -115,7 +128,7 @@ def ingest_source(name: str, *, full: bool) -> int:
     from ampere.data.folders import data_root
     from ampere.data.http import client
     from ampere.data.raw import RawStore
-    from ampere.sources import calendars, eco2mix, enedis, openmeteo, smard
+    from ampere.sources import calendars, eco2mix, enedis, openmeteo, pvgis, smard
 
     ingest = {
         "smard": smard.ingest,
@@ -123,6 +136,7 @@ def ingest_source(name: str, *, full: bool) -> int:
         "openmeteo": openmeteo.ingest,
         "enedis": enedis.ingest,
         "calendars": calendars.ingest,
+        "pvgis": pvgis.ingest,
     }[name]
 
     root = data_root()
@@ -191,3 +205,42 @@ def run_apart(*args: str) -> int:
     signal killed it. A step that the kernel kills for lack of memory, or that Polars aborts,
     stops only its own process, and the next steps keep their turn."""
     return subprocess.run([sys.executable, "-m", "ampere", *args], check=False).returncode
+
+
+def solar_check() -> int:
+    """Compare the solar model with PVGIS, then with the solar of the region (ADR 032). The exit
+    status is 1 when the factor that PVGIS gives strays more than 10 % from 1, a sign of a fault
+    of the model, or when it no longer matches the factor written in the code."""
+    import polars as pl
+
+    from ampere.data.days import day_bounds
+    from ampere.data.folders import data_root
+    from ampere.data.periods import TEST_START
+    from ampere.solar import CALIBRATION, calibration_report, regional_report
+    from ampere.sources.archive import SINCE
+
+    clean = data_root() / "clean"
+    try:
+        months, factor = calibration_report(clean)
+        regional, correlation = regional_report(clean, day_bounds(SINCE)[0], TEST_START)
+    except FileNotFoundError as error:
+        log.error("%s: ingest openmeteo, eco2mix and pvgis first", error)
+        return 1
+    with pl.Config(tbl_rows=40, float_precision=3):
+        print(months)
+        print(regional)
+    log.info("calibration: PVGIS gives %.4f times the model, from July to December 2023", factor)
+    log.info(
+        "region: a correlation of %.3f, hour by hour, from July 2023 to June 2025", correlation
+    )
+    # A NaN would make both comparisons below false, and pass for a match.
+    if not math.isfinite(factor):
+        log.error("the factor is %s: look for a fault of the model", factor)
+        return 1
+    if abs(factor - 1) > 0.10:
+        log.error("the model strays %.1f %% from PVGIS: look for a fault", 100 * (factor - 1))
+        return 1
+    if abs(factor - CALIBRATION) > 0.005:
+        log.error("CALIBRATION is %s, the data give %.3f: update ampere.solar", CALIBRATION, factor)
+        return 1
+    return 0
