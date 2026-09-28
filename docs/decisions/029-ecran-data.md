@@ -57,7 +57,10 @@ Les quatre séries choisies le 27 septembre, et deux ajouts possibles :
 
 L'auteur a choisi l'option 1 pour la source des données, la période, la mise en page et la date, et les deux ajouts au contenu.
 
-- **Dates publiées** : à chaque passage, éCO2mix demande au catalogue d'ODRÉ, en une requête, le `data_processed` de ses quatre jeux. Les calendriers demandent celui du calendrier scolaire au catalogue de data.education.gouv.fr, et, à data.gouv.fr, la fiche du jeu « Jours fériés en France », dont ils lisent le `last_modified` de la ressource que lit Ampère, l'API `calendrier.api.gouv.fr/jours-feries/`. Ces réponses vont dans le brut. `clean/eco2mix/updates.parquet` et `clean/calendars/updates.parquet` gardent, par jeu, la date publiée et l'heure de réception. Une réponse fautive est une erreur du rapport, sans effet sur les données.
+- **Dates publiées** : à chaque passage, une fois ses données écrites, éCO2mix demande au catalogue d'ODRÉ, en une requête, le `data_processed` de ses quatre jeux. Les calendriers demandent celui du calendrier scolaire au catalogue de data.education.gouv.fr, et, à data.gouv.fr, la fiche du jeu « Jours fériés en France », où ils lisent le `last_modified` du fichier de métropole, `jours_feries_metropole.csv`. L'API que lit Ampère sert les mêmes jours, mais data.gouv.fr date sa page à chaque mise en ligne du site de l'API : l'auteur a choisi la date du fichier, qui ne change qu'avec la liste.
+  - Ces réponses vont dans le brut. La fiche de data.gouv.fr, dont les compteurs de visites changent à chaque appel, n'y entre de nouveau que si l'adresse ou la date d'une ressource change.
+  - `clean/eco2mix/updates.parquet` et `clean/calendars/updates.parquet` gardent, par jeu, la date publiée et l'heure de la première réception qui l'a donnée.
+  - Une date doit tomber entre le 1er janvier 2000 et le lendemain du passage. Une requête qui échoue, ou une réponse fautive, est une erreur du rapport : la date gardée avant reste, et les données sont écrites quand même.
 - **Export** : après les cinq sources, `ampere daily` écrit `exports/recent.json` dans `AMPERE_DATA`, en une écriture atomique. `ampere export` fait la même chose à la main. La période va de minuit, heure de Paris, sept jours avant le jour de l'export, jusqu'à la fin du lendemain. Le fichier contient :
   - le prix spot de la zone France (SMARD, €/MWh) ;
   - la consommation de la France et la prévision de RTE (éCO2mix, MW) ;
@@ -65,7 +68,7 @@ L'auteur a choisi l'option 1 pour la source des données, la période, la mise e
   - la production solaire d'Auvergne-Rhône-Alpes (éCO2mix, MW) ;
   - la température à Lyon (Open-Meteo, °C), observée, puis prévue par le dernier run après la dernière heure observée ;
   - pour chaque jour de Paris de la période, le jour férié et les vacances des élèves de Lyon ;
-  - pour chaque source, son nom, sa licence, la date qu'elle publie quand elle est sous Licence Ouverte, et l'heure de la dernière réception.
+  - pour chaque source, son nom et sa licence, écrits dans le code, la date qu'elle publie quand elle est sous Licence Ouverte, et l'heure où Ampère a reçu ses dernières valeurs.
 
   Chaque point est un instant UTC en millisecondes et une valeur, dans l'unité du nettoyé. Une source absente ou en retard donne une série plus courte ou vide, jamais une erreur de l'export : l'écran montre jusqu'où va chaque série. Un export qui ne peut pas s'écrire fait échouer le traitement.
 - **API** : `GET /api/data/recent` lit le fichier, en contrôle la taille et la forme, puis le renvoie. Tant qu'aucun export n'existe, elle répond 503.
@@ -75,6 +78,6 @@ L'auteur a choisi l'option 1 pour la source des données, la période, la mise e
 
 - L'API ne charge ni Polars ni DuckDB. DuckDB viendra quand elle devra interroger les résultats et les scénarios.
 - L'écran change une fois par jour, après le traitement de 14 h. Le prix du lendemain y apparaît donc à 14 h, une heure après sa publication.
-- Trois requêtes de plus par passage. La date d'éCO2mix change à chaque mise à jour d'ODRÉ, donc le brut garde environ 400 octets de plus chaque jour.
-- Les noms des jours fériés et des vacances s'affichent comme du texte. Dans une infobulle d'ECharts, qui interprète le HTML, ils sont d'abord échappés.
+- Trois requêtes de plus par passage. La date d'éCO2mix change à chaque mise à jour d'ODRÉ, donc le brut garde environ 400 octets de plus chaque jour ; la fiche de data.gouv.fr, 16 Ko, n'y entre qu'aux changements de ses ressources.
+- Les noms des jours fériés et des vacances s'affichent comme du texte. Dans une infobulle d'ECharts, qui interprète le HTML, ils sont d'abord échappés. L'export borne leur longueur et en retire les caractères de contrôle, et il refuse les nombres non finis ; l'API contrôle de nouveau la forme du fichier. L'infobulle doit fonctionner avec la CSP de la démo, sans `'unsafe-inline'`.
 - La période de test (ADR 007) n'est pas concernée : l'écran ne montre que les derniers jours.

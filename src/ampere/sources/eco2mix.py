@@ -32,9 +32,10 @@ from ampere.data.days import (
     paris_months,
     quarter_hours,
 )
+from ampere.data.http import REQUEST_FAILURES
 from ampere.data.raw import DamagedRawFile, RawStore
 from ampere.sources.archive import PAUSE, SINCE, fetch_json
-from ampere.sources.shapes import SchemaError, is_number, load_json, utc_instant
+from ampere.sources.shapes import SchemaError, is_number, load_json, update_date, utc_instant
 
 log = logging.getLogger(__name__)
 
@@ -193,8 +194,7 @@ def odre_datasets() -> list[str]:
 
 
 def parse_updates(content: bytes, url: str, now: datetime) -> dict[str, datetime]:
-    """The date ODRÉ last updated each dataset, from its catalogue. A date later than the day
-    after the run is faulty metadata, as with the publications of Enedis (ADR 026)."""
+    """The date ODRÉ last updated each dataset, from its catalogue."""
     body = load_json(content, url)
     results = body.get("results") if isinstance(body, dict) else None
     if not isinstance(results, list):
@@ -203,11 +203,11 @@ def parse_updates(content: bytes, url: str, now: datetime) -> dict[str, datetime
     dates: dict[str, datetime] = {}
     for row in results:
         name = row.get("dataset_id") if isinstance(row, dict) else None
-        if name not in wanted:
+        if not isinstance(name, str) or name not in wanted:
             continue
         value = row.get("data_processed")
-        moment = utc_instant(value)
-        if moment is None or moment > now + timedelta(days=1):
+        moment = update_date(value, now)
+        if moment is None:
             raise SchemaError(f"{url}: unexpected data_processed {value!r} for {name}")
         dates[name] = moment
     missing = sorted(wanted - dates.keys())
@@ -309,25 +309,7 @@ def ingest(
                 file, held = other, kept_other
             if held is not None:
                 plan.append((file, *held))
-    url = updates_url()
-    content, received_at = ask(UPDATES, url, UPDATES_MAX_BYTES)
-    try:
-        dates = parse_updates(content, url, now)
-    except SchemaError as error:
-        # The dates kept from an earlier run stay; the measures do not depend on them.
-        errors.append(str(error))
-    else:
-        write_updates(
-            {name: (moment, received_at) for name, moment in dates.items()},
-            clean / SOURCE / "updates.parquet",
-        )
     measures = build(plan)
-    log.info(
-        "eco2mix: %d requests, %d new responses, %d values",
-        asked,
-        len(store.receipts(SOURCE)) - kept,
-        measures.height,
-    )
     report = check(measures, store, since=since, now=now)
     report.errors[:0] = errors
     report.warnings[:0] = warnings
@@ -336,6 +318,27 @@ def ingest(
         log.error("%s kept as it was: the new values break its rules", path)
     else:
         write_parquet(measures, path)
+    # The dates of last update come once the measures are written: they are cited with the data,
+    # never needed to build them. A request that fails, or a faulty answer, is an error of the
+    # report, and the dates kept from an earlier run stay.
+    url = updates_url()
+    try:
+        content, received_at = ask(UPDATES, url, UPDATES_MAX_BYTES)
+        dates = parse_updates(content, url, now)
+    except (SchemaError, *REQUEST_FAILURES) as error:
+        report.errors.append(str(error))
+    else:
+        write_updates(
+            {name: (moment, received_at) for name, moment in dates.items()},
+            clean / SOURCE / "updates.parquet",
+            known=odre_datasets(),
+        )
+    log.info(
+        "eco2mix: %d requests, %d new responses, %d values",
+        asked,
+        len(store.receipts(SOURCE)) - kept,
+        measures.height,
+    )
     return report
 
 

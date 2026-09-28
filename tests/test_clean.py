@@ -75,9 +75,10 @@ def test_write_updates_keeps_the_dates_it_is_not_given(tmp_path: Path) -> None:
             "a": (datetime(2026, 9, 1, tzinfo=UTC), first),
         },
         path,
+        known=("a", "b"),
     )
     later = first + timedelta(days=1)
-    write_updates({"b": (datetime(2026, 9, 29, tzinfo=UTC), later)}, path)
+    write_updates({"b": (datetime(2026, 9, 29, tzinfo=UTC), later)}, path, known=("a", "b"))
     frame = pl.read_parquet(path)
     assert frame.schema == UPDATES
     assert frame.rows() == [
@@ -86,12 +87,37 @@ def test_write_updates_keeps_the_dates_it_is_not_given(tmp_path: Path) -> None:
     ]
 
 
+def test_write_updates_forgets_a_dataset_the_source_no_longer_asks_for(tmp_path: Path) -> None:
+    path = tmp_path / "updates.parquet"
+    moment = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    write_updates({"old": (moment, moment), "a": (moment, moment)}, path, known=("old", "a"))
+    write_updates({"a": (moment, moment)}, path, known=("a",))
+    assert pl.read_parquet(path)["dataset"].to_list() == ["a"]
+
+
 def test_write_updates_writes_over_a_file_that_does_not_read(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = tmp_path / "updates.parquet"
     path.write_bytes(b"not parquet")
     moment = datetime(2026, 9, 28, 12, tzinfo=UTC)
-    write_updates({"a": (moment, moment)}, path)
+    write_updates({"a": (moment, moment)}, path, known=("a",))
     assert pl.read_parquet(path).rows() == [("a", moment, moment)]
+    assert "does not read" in caplog.text
+
+
+def test_write_updates_writes_over_a_file_that_makes_polars_panic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "updates.parquet"
+    moment = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    write_updates({"a": (moment, moment)}, path, known=("a", "b"))
+
+    def panic(*args: object, **options: object) -> pl.DataFrame:
+        raise pl.exceptions.PanicException("index out of bounds")
+
+    monkeypatch.setattr(pl, "read_parquet", panic)
+    write_updates({"b": (moment, moment)}, path, known=("a", "b"))
+    monkeypatch.undo()
+    assert pl.read_parquet(path)["dataset"].to_list() == ["b"]
     assert "does not read" in caplog.text

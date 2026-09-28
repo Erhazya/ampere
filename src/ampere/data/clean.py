@@ -6,7 +6,7 @@ when its rows are valid.
 
 import io
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -54,18 +54,22 @@ def write_parquet(frame: pl.DataFrame, path: Path) -> None:
     write_atomically(path, buffer.getvalue())
 
 
-def write_updates(dates: Mapping[str, tuple[datetime, datetime]], path: Path) -> None:
+def write_updates(
+    dates: Mapping[str, tuple[datetime, datetime]], path: Path, *, known: Collection[str]
+) -> None:
     """Record, for each dataset, the date its source last updated it and the reception of the
-    response that says so. The other datasets of the file keep their row: a source may give some
-    dates and fail to give others."""
+    first response that gave that date. The other known datasets keep their row, since a source
+    may give some dates and fail to give others; a dataset the source no longer asks for leaves
+    the file."""
     rows = {}
     if path.exists():
         try:
             kept = pl.read_parquet(path)
             rows = {row[0]: (row[1], row[2]) for row in kept.select(UPDATES.names()).rows()}
-        except (OSError, pl.exceptions.PolarsError) as error:
+        # Polars may even panic on a damaged file, and its panic is a BaseException.
+        except (OSError, pl.exceptions.PolarsError, pl.exceptions.PanicException) as error:
             log.warning("%s does not read (%s): it is written again", path, error)
-    rows.update(dates)
+    rows = {name: moments for name, moments in (rows | dict(dates)).items() if name in known}
     frame = pl.DataFrame(
         [(name, *moments) for name, moments in sorted(rows.items())], schema=UPDATES, orient="row"
     )
