@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 import ampere
 from ampere import cli
 from ampere.data.clean import Report
-from ampere.sources import calendars, eco2mix, enedis, openmeteo, smard
+from ampere.sources import archive, calendars, eco2mix, enedis, openmeteo, smard
 from ampere.sources.shapes import SchemaError
 
 
@@ -201,7 +201,7 @@ def test_ingest_passes_the_time_of_the_run_in_utc_and_the_full_option(
     assert first["full"] is False and second["full"] is True
     # The history starts where ADR 023 says, and no option shortens it.
     assert "since" not in first
-    assert date(2023, 7, 1) == smard.SINCE
+    assert date(2023, 7, 1) == archive.SINCE
     assert f"data folder: {data}" in caplog.text
     assert "smard: 0 invalid rows, 0 errors, 0 warnings" in caplog.text
 
@@ -215,7 +215,7 @@ def test_ingest_eco2mix_runs_its_own_source(
     assert cli.main(["ingest", "eco2mix", "--full"]) == 0
     assert prices == []
     assert measures[0]["clean"] == data / "clean" and measures[0]["full"] is True
-    assert date(2023, 7, 1) == eco2mix.SINCE
+    assert date(2023, 7, 1) == archive.SINCE
     assert ("ampere", logging.WARNING, "real time: no consumption") in caplog.record_tuples
     assert "eco2mix: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
@@ -231,7 +231,7 @@ def test_ingest_openmeteo_runs_its_own_source(
     assert weather[0]["clean"] == data / "clean" and weather[0]["full"] is False
     # The history and the first run are those of ADR 025, and no option changes them.
     assert "since" not in weather[0] and "first_run" not in weather[0]
-    assert (date(2023, 7, 1), date(2024, 3, 14)) == (openmeteo.SINCE, openmeteo.FIRST_RUN)
+    assert (date(2023, 7, 1), date(2024, 3, 14)) == (archive.SINCE, openmeteo.FIRST_RUN)
     assert ("ampere", logging.ERROR, "run 2026-06-12T00:00: missing") in caplog.record_tuples
     assert "openmeteo: 0 invalid rows, 1 errors, 0 warnings" in caplog.text
 
@@ -247,7 +247,7 @@ def test_ingest_enedis_runs_its_own_source(
     assert prices == []
     assert curves[0]["clean"] == data / "clean" and curves[0]["full"] is True
     assert "since" not in curves[0]
-    assert date(2023, 7, 1) == enedis.SINCE
+    assert date(2023, 7, 1) == archive.SINCE
     assert ("ampere", logging.WARNING, empty) in caplog.record_tuples
     assert "enedis: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
@@ -262,7 +262,7 @@ def test_ingest_calendars_runs_its_own_source(
     assert prices == []
     assert days[0]["clean"] == data / "clean" and days[0]["full"] is False
     assert "since" not in days[0]
-    assert date(2023, 7, 1) == calendars.SINCE
+    assert date(2023, 7, 1) == archive.SINCE
     assert ("ampere", logging.ERROR, "calendars: no day known") in caplog.record_tuples
     assert "calendars: 0 invalid rows, 1 errors, 0 warnings" in caplog.text
 

@@ -15,7 +15,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -25,8 +25,8 @@ import polars as pl
 from ampere.data.clean import Report, write_parquet
 from ampere.data.days import PARIS, day_bounds, every_day, paris_day, paris_months, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
-from ampere.sources.archive import JSON, fetch
-from ampere.sources.shapes import SchemaError, load_json, read_parquet
+from ampere.sources.archive import JSON, PAUSE, SINCE, fetch
+from ampere.sources.shapes import SchemaError, load_json, read_parquet, utc_instant
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +35,9 @@ NATIVE = "https://opendata.enedis.fr/data-fair/api/v1/datasets"
 EXPORTS = "https://opendata.enedis.fr/api/explore/v2.1/catalog/datasets"
 PARQUET = "application/vnd.apache.parquet"
 PUBLICATION = "publication"
-# The start of the history, shared by every source.
-SINCE = date(2023, 7, 1)
 # After a new publication, every month is asked again for this many Paris days, that of its first
 # reception included: a run cut short leaves no month at the publication before.
 REFRESH = timedelta(days=7)
-# Seconds between two requests, out of politeness.
-PAUSE = 0.5
 MAX_METADATA_BYTES = 1_000_000
 # The largest month accepted: a month of residential consumption weighs 805 kB.
 MAX_MONTH_BYTES = 20_000_000
@@ -311,7 +307,7 @@ def ingest(
         if refresh:
             refreshed.add(dataset.name)
         else:
-            wanted = to_ask(store, responses(store), wanted)
+            wanted = to_ask(store, store.responses(SOURCE), wanted)
         for month in wanted:
             content, receipt = ask(dataset.kind, month.name, month.url, "parquet")
             try:
@@ -319,7 +315,7 @@ def ingest(
             except SchemaError as error:
                 # A faulty month is an error; the run goes on with what the raw layer has.
                 report.errors.append(str(error))
-    history = responses(store)
+    history = store.responses(SOURCE)
     for dataset in datasets:
         frame, built = build(store, history, dataset, since=since, today=paris_day(now))
         report.errors.extend(built.errors)
@@ -347,19 +343,11 @@ def ingest(
     return report
 
 
-def responses(store: RawStore) -> dict[tuple[str, str], list[Receipt]]:
-    """The responses kept for each request of each dataset, in the order they came."""
-    kept: dict[tuple[str, str], list[Receipt]] = {}
-    for receipt in store.receipts(SOURCE):
-        kept.setdefault((receipt.dataset, receipt.request), []).append(receipt)
-    return kept
-
-
 def first_reception(store: RawStore, dataset: Dataset, published: datetime) -> datetime | None:
     """When the last publication of a dataset came to replace another: the reception of the
     earliest of the last metadata responses that give its date. None when no earlier response
     gives another date: the publication is then the first one ever seen."""
-    receipts = responses(store).get((PUBLICATION, dataset.name), [])
+    receipts = store.responses(SOURCE).get((PUBLICATION, dataset.name), [])
     first = None
     for receipt in reversed(receipts):
         try:
@@ -489,14 +477,10 @@ def parse_publication(content: bytes, url: str) -> datetime:
     """The date of the last publication of a dataset, from its metadata."""
     body = load_json(content, url)
     value = body.get("dataUpdatedAt") if isinstance(body, dict) else None
-    if isinstance(value, str):
-        try:
-            moment = datetime.fromisoformat(value)
-            if moment.utcoffset() is not None:
-                return moment.astimezone(UTC)
-        except (ValueError, OverflowError):
-            pass
-    raise SchemaError(f"{url}: no date of publication, dataUpdatedAt {value!r}")
+    moment = utc_instant(value)
+    if moment is None:
+        raise SchemaError(f"{url}: no date of publication, dataUpdatedAt {value!r}")
+    return moment
 
 
 def read_month(content: bytes, month: Month, url: str) -> pl.DataFrame:

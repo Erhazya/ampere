@@ -3,6 +3,7 @@
 import io
 import json
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any, TypeGuard
 
 import polars as pl
@@ -10,6 +11,19 @@ import polars as pl
 
 class SchemaError(ValueError):
     """A response that no longer has the shape the code expects."""
+
+
+def utc_instant(value: object) -> datetime | None:
+    """A string in ISO 8601 with its offset, as an instant in UTC; None for anything else, an
+    instant without an offset or beyond the calendar of Python once in UTC included."""
+    if isinstance(value, str):
+        try:
+            moment = datetime.fromisoformat(value)
+            if moment.utcoffset() is not None:
+                return moment.astimezone(UTC)
+        except (ValueError, OverflowError):
+            pass
+    return None
 
 
 def load_json(content: bytes, url: str) -> Any:
