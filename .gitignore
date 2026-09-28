@@ -28,3 +28,5 @@ web/dist/
 .vscode/
 .DS_Store
 Thumbs.db
+# The copies Jupyter keeps next to a notebook it opens.
+.ipynb_checkpoints/

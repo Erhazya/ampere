@@ -41,8 +41,14 @@ def table(tmp_path: Path) -> Path:
                 date(2026, 7, 1),
             ],
             "value": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "received_at": [datetime(2026, 9, 28, tzinfo=UTC)] * 5,
         },
-        schema={"start": pl.Datetime("us", "UTC"), "day": pl.Date(), "value": pl.Float64()},
+        schema={
+            "start": pl.Datetime("us", "UTC"),
+            "day": pl.Date(),
+            "value": pl.Float64(),
+            "received_at": pl.Datetime("us", "UTC"),
+        },
     ).write_parquet(path)
     return path
 
@@ -114,8 +120,10 @@ def test_refuses_a_range_it_cannot_place(
         # into the test period.
         ("start", date(2025, 6, 1), TEST_FIRST_DAY, "not days"),
         ("day", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "not UTC instants"),
-        ("value", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "not UTC instants"),
-        ("missing", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "no column"),
+        ("time", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "no column"),
+        # Every row was received in September 2026: by reception, the test period would come too.
+        ("received_at", datetime(2026, 7, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC), "axis"),
+        ("value", datetime(2025, 1, 1, tzinfo=UTC), TEST_START, "axis"),
     ],
 )
 def test_refuses_a_column_of_another_kind_than_its_bounds(
@@ -130,3 +138,19 @@ def test_refuses_instants_without_the_utc_time_zone(tmp_path: Path) -> None:
     pl.DataFrame({"start": [datetime(2025, 1, 1)]}).write_parquet(path)
     with pytest.raises(TypeError, match="not UTC instants"):
         scan(path, "start", datetime(2025, 1, 1, tzinfo=UTC), TEST_START)
+
+
+def test_keeps_the_last_hour_of_the_test_period_out_of_the_weather_after_it(tmp_path: Path) -> None:
+    # Open-Meteo labels a mean over an hour with the end of that hour (ADR 025): the value at
+    # TEST_END is the mean of the last hour of the test period.
+    path = tmp_path / "weather.parquet"
+    pl.DataFrame(
+        {"time": [TEST_END, TEST_END + timedelta(hours=1)], "value": [1.0, 2.0]},
+        schema={"time": pl.Datetime("us", "UTC"), "value": pl.Float64()},
+    ).write_parquet(path)
+    later = datetime(2027, 1, 1, tzinfo=UTC)
+    with pytest.raises(ReservedPeriodError):
+        scan(path, "time", TEST_END, later)
+    assert scan(path, "time", TEST_END + timedelta(hours=1), later).collect()[
+        "value"
+    ].to_list() == [2.0]

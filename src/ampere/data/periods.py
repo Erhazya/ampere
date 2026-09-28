@@ -18,6 +18,11 @@ TEST_FIRST_DAY = date(2025, 7, 1)
 TEST_LAST_DAY = date(2026, 6, 30)
 TEST_START = day_bounds(TEST_FIRST_DAY)[0]
 TEST_END = day_bounds(TEST_LAST_DAY)[1]
+# The time axis of each table of the clean layer: the start of a quarter-hour, a half-hour or a
+# day for SMARD, éCO2mix and Enedis, the hour of Open-Meteo, the Paris day of the calendars. Any
+# other column of instants, such as received_at or the run of a forecast, would reach the test
+# period by another road.
+TIME_AXES = ("start", "time", "day")
 
 
 class ReservedPeriodError(ValueError):
@@ -29,6 +34,8 @@ def scan(path: Path, column: str, start: datetime | date, end: datetime | date) 
     frame: Polars then reads only what it needs. Start and end are both UTC instants, for a table
     of instants, or both Paris days, for a table of days such as the calendars, and the column
     holds the same. A range that touches the test period is refused (ADR 007)."""
+    if column not in TIME_AXES:
+        raise ValueError(f"{column} is not a time axis of the clean layer: {', '.join(TIME_AXES)}")
     # A datetime is also a date for Python: an instant must not pass for a day, nor the reverse.
     instants = isinstance(start, datetime), isinstance(end, datetime)
     if instants[0] != instants[1]:
@@ -37,6 +44,10 @@ def scan(path: Path, column: str, start: datetime | date, end: datetime | date) 
         if start.utcoffset() is None or end.utcoffset() is None:
             raise ValueError("an instant needs a time zone: without one, it could be any time")
         reserved: tuple[datetime | date, datetime | date] = (TEST_START, TEST_END)
+        # Open-Meteo labels a mean over an hour with the end of that hour (ADR 025): its value at
+        # TEST_END is the mean of the last hour of the test period.
+        if column == "time":
+            reserved = (TEST_START, TEST_END + timedelta(hours=1))
     else:
         reserved = (TEST_FIRST_DAY, TEST_LAST_DAY + timedelta(days=1))
     if not start < end:

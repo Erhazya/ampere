@@ -9,8 +9,13 @@ from typing import Any
 import pytest
 
 NOTEBOOKS = sorted((Path(__file__).parents[1] / "notebooks").glob("*.ipynb"))
-# Every way to read a table without the guard of the test period (ADR 007).
-DIRECT_READS = re.compile(r"read_parquet|scan_parquet|read_ipc|scan_ipc|duckdb|pd\.read_|open\(")
+# The usual ways to read a file without the guard of the test period (ADR 007).
+DIRECT_READS = re.compile(
+    r"read_parquet|scan_parquet|read_ipc|scan_ipc|read_csv|scan_csv|read_json|scan_ndjson|pyarrow"
+    r"|duckdb|pd\.read_|open\(|read_bytes|read_text"
+)
+# What the outputs, published with the notebook, must never show of the server.
+SERVER = re.compile(r"/home/|/root|/tmp/|erhazya|hms1555")
 
 
 def code_cells(path: Path) -> list[dict[str, Any]]:
@@ -43,3 +48,18 @@ def test_it_reads_the_data_through_the_guard_only(path: Path) -> None:
     code = "\n".join(source(cell) for cell in code_cells(path))
     assert "from ampere.data.periods import" in code
     assert DIRECT_READS.findall(code) == []
+
+
+@pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda path: path.name)
+def test_its_outputs_show_no_warning_and_nothing_of_the_server(path: Path) -> None:
+    outputs = [output for cell in code_cells(path) for output in cell["outputs"]]
+    # A warning of a library would print its path, in the folders of the development account.
+    assert [output for output in outputs if output.get("name") == "stderr"] == []
+    # The text of each output, but not its images, whose base64 could spell anything.
+    texts = [output.get("text", "") for output in outputs] + [
+        value
+        for output in outputs
+        for kind, value in output.get("data", {}).items()
+        if not kind.startswith("image/")
+    ]
+    assert SERVER.findall(json.dumps(texts, ensure_ascii=False)) == []
