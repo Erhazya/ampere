@@ -71,7 +71,7 @@ L'auteur a choisi l'option 1 pour la source des données, la période, la mise e
   - pour chaque source, son nom et sa licence, écrits dans le code, la date qu'elle publie quand elle est sous Licence Ouverte, et l'heure où Ampère a reçu ses dernières valeurs.
 
   Chaque point est un instant UTC en millisecondes et une valeur, dans l'unité du nettoyé. Une source absente ou en retard donne une série plus courte ou vide, jamais une erreur de l'export : l'écran montre jusqu'où va chaque série. Un export qui ne peut pas s'écrire fait échouer le traitement.
-- **API** : `GET /api/data/recent` lit le fichier, en contrôle la taille et la forme, puis le renvoie. Tant qu'aucun export n'existe, elle répond 503.
+- **API** : `GET /api/data/recent` n'ouvre qu'un fichier ordinaire du dossier des données, ni lien ni tube. Elle en contrôle la taille, puis la forme en mode strict : les noms, les licences et les unités sont ceux du code, la période dure dix jours au plus, et les points sont triés dans la période. Elle renvoie ensuite ce qu'elle a lu, avec un ETag. Tant qu'aucun export n'existe, elle répond 503 ; un export refusé aussi, et son journal n'en reprend rien.
 - **Écran** : un graphique par grandeur, empilés sur le même axe du temps, en heure de Paris, avec un curseur commun ; les prévisions en pointillés ; les jours fériés et les vacances en bandes sur chaque graphique ; sous les graphiques, chaque source avec sa licence et sa date. Une maquette Figma précède le code, et les textes sont d'abord en anglais (ADR 010).
 
 ## Conséquences

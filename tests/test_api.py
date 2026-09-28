@@ -2,6 +2,7 @@
 
 import json
 import mimetypes
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -147,9 +148,9 @@ def test_the_dashboard_files_change_no_api_answer(
     assert served.content == alone.content
 
 
-def export(**changes: Any) -> bytes:
+def content(**changes: Any) -> dict[str, Any]:
     """A small export of the recent days, of the shape of ADR 029."""
-    content = {
+    base: dict[str, Any] = {
         "generated_at": 1_790_596_000_000,
         "start": 1_790_028_000_000,
         "end": 1_790_805_600_000,
@@ -172,7 +173,17 @@ def export(**changes: Any) -> bytes:
             }
         ],
     }
-    return json.dumps({**content, **changes}).encode()
+    return {**base, **changes}
+
+
+def export(**changes: Any) -> bytes:
+    return json.dumps(content(**changes)).encode()
+
+
+def price(*points: list[Any], **changes: Any) -> list[dict[str, Any]]:
+    """The price series, with these points."""
+    series = content()["series"][0]
+    return [{**series, "points": list(points), **changes}]
 
 
 @pytest.fixture
@@ -183,13 +194,15 @@ def exported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path / EXPORT
 
 
-def test_the_recent_days_are_served_as_the_daily_job_exported_them(
+def test_the_recent_days_are_served_as_the_check_read_them(
     client: TestClient, exported: Path
 ) -> None:
-    exported.write_bytes(export())
+    # Written with spaces and line breaks, served compact: the API sends what it checked.
+    exported.write_text(json.dumps(content(), indent=2), encoding="utf-8")
     response = client.get("/api/data/recent")
     assert response.status_code == 200
-    assert response.content == export()
+    assert response.json() == content()
+    assert b"\n" not in response.content
     assert response.headers["content-type"] == "application/json"
     # The browser asks again at each visit, and downloads the export only when it changed.
     assert response.headers["cache-control"] == "no-cache"
@@ -210,38 +223,83 @@ def test_without_an_export_the_recent_days_are_unavailable(
     assert response.json() == {"detail": "No export of the recent days yet"}
 
 
-@pytest.mark.parametrize(
-    ("body", "why"),
-    [
-        (b"not json", "breaks the shape"),
-        (export(extra=1), "breaks the shape"),
-        (
-            export(
-                series=[{"id": "price", "source": "smard", "unit": "EUR/MWh", "points": [[1, 2]]}]
-            ),
-            "breaks the shape",
-        ),
-        (
-            export(
-                days=[{"day": "2026-09-21", "public_holiday": "x" * 101, "school_holidays": None}]
-            ),
-            "breaks the shape",
-        ),
-        (export().replace(b"81.5", b"NaN"), "breaks the shape"),
-        (b" " * MAX_BYTES + export(), f"is larger than {MAX_BYTES} bytes"),
-    ],
-    ids=["not JSON", "an unknown field", "an instant before 2000", "a long name", "NaN", "too big"],
-)
+SHAPES = {
+    "not JSON": b"not json",
+    "an unknown field": export(extra=1),
+    "an instant before 2000": export(series=price([1, 2])),
+    "a value in words": export(series=price([1_790_028_000_000, "81.5"])),
+    "a value that is a boolean": export(series=price([1_790_028_000_000, True])),
+    "NaN": export().replace(b"81.5", b"NaN"),
+    "a long name": export(
+        days=[{"day": "2026-09-21", "public_holiday": "x" * 101, "school_holidays": None}]
+    ),
+    "a change of direction in a name": export(
+        days=[{"day": "2026-09-21", "public_holiday": "Toussaint\u202e", "school_holidays": None}]
+    ),
+    "a source named otherwise": export(
+        sources=[{**content()["sources"][0], "name": "Another name"}]
+    ),
+    "a series in another unit": export(series=price([1_790_028_000_000, 81.5], unit="MW")),
+    "two price series": export(series=price() + price()),
+    "a period that ends before it starts": export(
+        start=1_790_805_600_000, end=1_790_028_000_000, series=price()
+    ),
+    "a period of eleven days": export(end=1_790_028_000_000 + 11 * 86_400_000),
+    "points out of order": export(
+        series=price([1_790_028_000_000, 1.0], [1_790_029_800_000, 2.0], [1_790_028_900_000, 3.0])
+    ),
+    "a point after the period": export(series=price([1_790_805_600_000, 1.0])),
+}
+
+
+@pytest.mark.parametrize("body", SHAPES.values(), ids=SHAPES.keys())
 def test_an_export_of_another_shape_is_not_served(
-    client: TestClient,
-    exported: Path,
-    caplog: pytest.LogCaptureFixture,
-    body: bytes,
-    why: str,
+    client: TestClient, exported: Path, caplog: pytest.LogCaptureFixture, body: bytes
 ) -> None:
     exported.write_bytes(body)
     response = client.get("/api/data/recent")
     assert response.status_code == 503
     assert response.json() == {"detail": "The export of the recent days is unusable"}
     # The log says which file, and why.
-    assert f"{exported} {why}" in caplog.text
+    assert f"{exported} breaks the shape of the export" in caplog.text
+
+
+def test_what_an_export_holds_stays_out_of_the_log(
+    client: TestClient, exported: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    exported.write_bytes(json.dumps({**content(), "a\nforged line\u001b[2J": 1}).encode())
+    assert client.get("/api/data/recent").status_code == 503
+    assert "forged line" not in caplog.text and "\u001b" not in caplog.text
+
+
+def test_an_export_too_big_is_not_served(
+    client: TestClient, exported: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    exported.write_bytes(b" " * MAX_BYTES + export())
+    assert client.get("/api/data/recent").status_code == 503
+    assert f"{exported} is larger than {MAX_BYTES} bytes" in caplog.text
+
+
+def test_only_a_regular_file_of_the_data_folder_is_read(
+    client: TestClient, exported: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_bytes(export())
+    # A link, even to a good export: the daily job could point it anywhere in the container.
+    exported.symlink_to(elsewhere)
+    assert client.get("/api/data/recent").status_code == 503
+    assert f"{exported} does not open" in caplog.text
+    # A pipe would hold the request until someone writes in it.
+    exported.unlink()
+    os.mkfifo(exported)
+    assert client.get("/api/data/recent").status_code == 503
+    assert f"{exported} is not a regular file" in caplog.text
+    # A folder of exports that leads out of the data folder.
+    exported.unlink()
+    exported.parent.rmdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / EXPORT.name).write_bytes(export())
+    exported.parent.symlink_to(outside)
+    assert client.get("/api/data/recent").status_code == 503
+    assert "leads out of the data folder" in caplog.text

@@ -14,26 +14,18 @@ from pydantic import ValidationError
 from ampere.data.clean import Report
 from ampere.data.days import day_bounds, every_day, paris_day
 from ampere.data.raw import write_atomically
-from ampere.recent import EXPORT, LABEL, Recent
+from ampere.recent import EXPORT, LABEL, SERIES, SOURCES, Recent
 
 log = logging.getLogger(__name__)
 
 # The period: the seven Paris days before the day of the export, that day, and the next one.
 DAYS_BEFORE = 7
-# The name and licence of each source, written here and never read from a source (ADR 029).
-SOURCES = {
-    "smard": ("Bundesnetzagentur | SMARD.de", "CC BY 4.0"),
-    "eco2mix": ("RTE, éCO2mix", "Licence Ouverte 2.0"),
-    "openmeteo": ("Weather data by Open-Meteo.com", "CC BY 4.0"),
-    "school-holidays": ("Éducation nationale, calendrier scolaire", "Licence Ouverte 2.0"),
-    "public-holidays": ("Etalab, jours fériés", "Licence Ouverte 2.0"),
-}
-# The measures of éCO2mix on the screen: the series, the area, the measure and the unit.
+# The measures of éCO2mix on the screen: the series, the area and the measure.
 ECO2MIX = (
-    ("consumption", "FR", "consumption_mw", "MW"),
-    ("rte_forecast", "FR", "rte_forecast_mw", "MW"),
-    ("co2", "FR", "co2_g_per_kwh", "gCO2/kWh"),
-    ("solar", "ARA", "solar_mw", "MW"),
+    ("consumption", "FR", "consumption_mw"),
+    ("rte_forecast", "FR", "rte_forecast_mw"),
+    ("co2", "FR", "co2_g_per_kwh"),
+    ("solar", "ARA", "solar_mw"),
 )
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -54,12 +46,14 @@ def write_export(root: Path, now: datetime) -> Report:
     report = Report()
     content = build(root / "clean", now, report)
     try:
+        # First with the series named, then as the API reads the file: strict, from JSON.
         Recent.model_validate(content)
+        data = json.dumps(content, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        Recent.model_validate_json(data, strict=True)
     except ValidationError as error:
         report.errors.append(f"the export is not written: {refused(error, content)}")
         return report
-    data = json.dumps(content, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
-    write_atomically(root / EXPORT, data)
+    write_atomically(root / EXPORT, data.encode())
     log.info("export: %s, %d bytes", root / EXPORT, len(data))
     return report
 
@@ -71,12 +65,12 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
     series = []
 
     prices = within(table(clean / "smard" / "prices.parquet", report), "start", start, end)
-    series.append(entry("price", "smard", "EUR/MWh", prices, "start", "price_eur_per_mwh"))
+    series.append(entry("price", prices, "start", "price_eur_per_mwh"))
     received["smard"] = latest(prices)
 
     measures = table(clean / "eco2mix" / "measures.parquet", report)
     used = []
-    for name, area, measure, unit in ECO2MIX:
+    for name, area, measure in ECO2MIX:
         rows = within(
             None
             if measures is None
@@ -85,15 +79,15 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
             start,
             end,
         )
-        series.append(entry(name, "eco2mix", unit, rows, "start", "value"))
+        series.append(entry(name, rows, "start", "value"))
         used.append(rows)
     received["eco2mix"] = latest(*used)
 
     observed, forecast = temperatures(table(clean / "openmeteo" / "weather.parquet", report))
     observed = within(observed, "time", start, end)
     forecast = within(forecast, "time", start, end)
-    series.append(entry("temperature", "openmeteo", "degC", observed, "time", "value"))
-    series.append(entry("temperature_forecast", "openmeteo", "degC", forecast, "time", "value"))
+    series.append(entry("temperature", observed, "time", "value"))
+    series.append(entry("temperature_forecast", forecast, "time", "value"))
     received["openmeteo"] = latest(observed, forecast)
 
     first, last = paris_day(start), paris_day(end - timedelta(microseconds=1))
@@ -183,10 +177,10 @@ def temperatures(weather: pl.DataFrame | None) -> tuple[pl.DataFrame | None, pl.
     return observed, forecast
 
 
-def entry(
-    name: str, source: str, unit: str, rows: pl.DataFrame, time: str, value: str
-) -> dict[str, Any]:
-    """A series of the export: its points as [milliseconds, value] pairs."""
+def entry(name: str, rows: pl.DataFrame, time: str, value: str) -> dict[str, Any]:
+    """A series of the export: its source and unit, and its points as [milliseconds, value]
+    pairs."""
+    source, unit = SERIES[name]
     points = rows.select(pl.col(time).dt.epoch("ms"), pl.col(value)).rows() if rows.height else []
     return {"id": name, "source": source, "unit": unit, "points": points}
 

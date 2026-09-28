@@ -2,11 +2,13 @@
 it and the API checks again before serving it. A light module: the API imports neither Polars
 nor the sources."""
 
+import unicodedata
 from datetime import date
+from itertools import pairwise
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
 # Where the export lives in the data folder, and its size at most: nine days of seven series weigh
 # about 150 kB.
@@ -16,9 +18,39 @@ MAX_BYTES = 1_000_000
 LABEL = 100
 # Nine days of quarter-hours, with room: a longer series is not one of the export's.
 MAX_POINTS = 1_000
+# The longest period an export covers: nine Paris days, with room for a change of clock.
+LONGEST_MS = 10 * 86_400_000
+# The name and licence of each source, written here and never read from a source (ADR 029).
+SOURCES = {
+    "smard": ("Bundesnetzagentur | SMARD.de", "CC BY 4.0"),
+    "eco2mix": ("RTE, éCO2mix", "Licence Ouverte 2.0"),
+    "openmeteo": ("Weather data by Open-Meteo.com", "CC BY 4.0"),
+    "school-holidays": ("Éducation nationale, calendrier scolaire", "Licence Ouverte 2.0"),
+    "public-holidays": ("Etalab, jours fériés", "Licence Ouverte 2.0"),
+}
+# The source and the unit of each series, in the clean layer.
+SERIES = {
+    "price": ("smard", "EUR/MWh"),
+    "consumption": ("eco2mix", "MW"),
+    "rte_forecast": ("eco2mix", "MW"),
+    "co2": ("eco2mix", "gCO2/kWh"),
+    "solar": ("eco2mix", "MW"),
+    "temperature": ("openmeteo", "degC"),
+    "temperature_forecast": ("openmeteo", "degC"),
+}
+
+
+def printable(text: str) -> str:
+    """A name without control or format characters, such as a line break or a change of
+    direction: the export takes them out, and the API refuses a name that still has one."""
+    if any(unicodedata.category(c) in ("Cc", "Cf") for c in text):
+        raise ValueError("a name holds a control or format character")
+    return text
+
+
 # An instant in milliseconds since 1970, between 2000 and 2100.
 Millis = Annotated[int, Field(ge=946_684_800_000, lt=4_102_444_800_000)]
-Name = Annotated[str, Field(min_length=1, max_length=LABEL)]
+Name = Annotated[str, Field(min_length=1, max_length=LABEL), AfterValidator(printable)]
 
 
 class Shape(BaseModel):
@@ -43,6 +75,12 @@ class Series(Shape):
     unit: Annotated[str, Field(max_length=16)]
     points: Annotated[list[tuple[Millis, FiniteFloat]], Field(max_length=MAX_POINTS)]
 
+    @model_validator(mode="after")
+    def as_written_in_the_code(self) -> Self:
+        if (self.source, self.unit) != SERIES[self.id]:
+            raise ValueError(f"the series {self.id} has another source or unit than the code's")
+        return self
+
 
 class Day(Shape):
     """A Paris day of the period, with its public holiday and its school holidays, if any."""
@@ -62,6 +100,12 @@ class Source(Shape):
     updated_at: Millis | None
     received_at: Millis | None
 
+    @model_validator(mode="after")
+    def as_written_in_the_code(self) -> Self:
+        if (self.name, self.licence) != SOURCES[self.id]:
+            raise ValueError(f"the source {self.id} has another name or licence than the code's")
+        return self
+
 
 class Recent(Shape):
     """The export: the period, from its first instant to its end, excluded, and what it holds."""
@@ -69,6 +113,29 @@ class Recent(Shape):
     generated_at: Millis
     start: Millis
     end: Millis
-    series: Annotated[list[Series], Field(max_length=7)]
+    series: Annotated[list[Series], Field(max_length=len(SERIES))]
     days: Annotated[list[Day], Field(max_length=12)]
-    sources: Annotated[list[Source], Field(max_length=5)]
+    sources: Annotated[list[Source], Field(max_length=len(SOURCES))]
+
+    @model_validator(mode="after")
+    def within_its_period(self) -> Self:
+        if not self.start < self.end <= self.start + LONGEST_MS:
+            raise ValueError("the period ends before it starts, or lasts more than ten days")
+        series_ids: list[str] = [series.id for series in self.series]
+        source_ids: list[str] = [source.id for source in self.sources]
+        for names, what in [(series_ids, "series"), (source_ids, "sources")]:
+            if len(set(names)) != len(names):
+                raise ValueError(f"the {what} are not named once each")
+        for series in self.series:
+            instants = [instant for instant, _ in series.points]
+            if any(later <= earlier for earlier, later in pairwise(instants)):
+                raise ValueError(f"the points of {series.id} are not in the order of time")
+            if instants and not self.start <= instants[0] <= instants[-1] < self.end:
+                raise ValueError(f"the points of {series.id} leave the period")
+        return self
+
+
+# The names of every field of the export: the API names these in its log, and nothing else of a
+# file it refuses.
+MODELS: tuple[type[Shape], ...] = (Recent, Series, Day, Source)
+FIELDS = frozenset(name for model in MODELS for name in model.__pydantic_fields__)
