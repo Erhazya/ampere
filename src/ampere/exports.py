@@ -131,6 +131,8 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
     days = [
         {
             "day": day.isoformat(),
+            "start": millis(day_bounds(day)[0]),
+            "end": millis(day_bounds(day)[1]),
             "public_holiday": label(named.get(day, {}).get("public_holiday")),
             "school_holidays": label(named.get(day, {}).get("school_holidays")),
         }

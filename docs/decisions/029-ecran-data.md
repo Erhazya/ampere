@@ -67,7 +67,7 @@ L'auteur a choisi l'option 1 pour la source des données, la période, la mise e
   - l'intensité CO₂ de la France (éCO2mix, gCO₂/kWh) ;
   - la production solaire d'Auvergne-Rhône-Alpes (éCO2mix, MW) ;
   - la température à Lyon (Open-Meteo, °C), observée, puis prévue par le dernier run après la dernière heure observée ;
-  - pour chaque jour de Paris de la période, le jour férié et les vacances des élèves de Lyon ;
+  - pour chaque jour de Paris de la période, ses bornes, qui placent les minuits de Paris quel que soit le fuseau du navigateur, son jour férié et les vacances des élèves de Lyon ;
   - pour chaque source, son nom et sa licence, écrits dans le code, la date qu'elle publie quand elle est sous Licence Ouverte, et l'heure où Ampère a reçu ses dernières valeurs.
 
   Chaque point est un instant UTC en millisecondes et une valeur, dans l'unité du nettoyé. Une source absente ou en retard donne une série plus courte ou vide, jamais une erreur de l'export : l'écran montre jusqu'où va chaque série. Un export qui ne peut pas s'écrire fait échouer le traitement.

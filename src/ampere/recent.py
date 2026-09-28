@@ -83,9 +83,13 @@ class Series(Shape):
 
 
 class Day(Shape):
-    """A Paris day of the period, with its public holiday and its school holidays, if any."""
+    """A Paris day of the period, from its midnight to the next one, with its public holiday and
+    its school holidays, if any. Its bounds place the midnights of Paris on the screen, whatever
+    the time zone of the browser."""
 
     day: date
+    start: Millis
+    end: Millis
     public_holiday: Name | None
     school_holidays: Name | None
 
@@ -126,6 +130,15 @@ class Recent(Shape):
         for names, what in [(series_ids, "series"), (source_ids, "sources")]:
             if len(set(names)) != len(names):
                 raise ValueError(f"the {what} are not named once each")
+        if self.days:
+            starts = [day.start for day in self.days]
+            ends = [day.end for day in self.days]
+            if (
+                (starts[0], ends[-1]) != (self.start, self.end)
+                or starts[1:] != ends[:-1]
+                or any(end <= start for start, end in zip(starts, ends, strict=True))
+            ):
+                raise ValueError("the days do not follow each other over the period")
         for series in self.series:
             instants = [instant for instant, _ in series.points]
             if any(later <= earlier for earlier, later in pairwise(instants)):

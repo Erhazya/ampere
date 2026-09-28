@@ -162,7 +162,7 @@ def content(**changes: Any) -> dict[str, Any]:
                 "points": [[1_790_028_000_000, 81.5], [1_790_028_900_000, -3]],
             }
         ],
-        "days": [{"day": "2026-09-21", "public_holiday": None, "school_holidays": None}],
+        "days": days(),
         "sources": [
             {
                 "id": "smard",
@@ -174,6 +174,24 @@ def content(**changes: Any) -> dict[str, Any]:
         ],
     }
     return {**base, **changes}
+
+
+DAY = 86_400_000
+
+
+def days(**first: Any) -> list[dict[str, Any]]:
+    """The nine Paris days of the period, the first one changed as asked."""
+    return [
+        {
+            "day": f"2026-09-{21 + n}",
+            "start": 1_790_028_000_000 + n * DAY,
+            "end": 1_790_028_000_000 + (n + 1) * DAY,
+            "public_holiday": None,
+            "school_holidays": None,
+            **(first if n == 0 else {}),
+        }
+        for n in range(9)
+    ]
 
 
 def export(**changes: Any) -> bytes:
@@ -230,12 +248,8 @@ SHAPES = {
     "a value in words": export(series=price([1_790_028_000_000, "81.5"])),
     "a value that is a boolean": export(series=price([1_790_028_000_000, True])),
     "NaN": export().replace(b"81.5", b"NaN"),
-    "a long name": export(
-        days=[{"day": "2026-09-21", "public_holiday": "x" * 101, "school_holidays": None}]
-    ),
-    "a change of direction in a name": export(
-        days=[{"day": "2026-09-21", "public_holiday": "Toussaint\u202e", "school_holidays": None}]
-    ),
+    "a long name": export(days=days(public_holiday="x" * 101)),
+    "a change of direction in a name": export(days=days(public_holiday="Toussaint\u202e")),
     "a source named otherwise": export(
         sources=[{**content()["sources"][0], "name": "Another name"}]
     ),
@@ -249,6 +263,8 @@ SHAPES = {
         series=price([1_790_028_000_000, 1.0], [1_790_029_800_000, 2.0], [1_790_028_900_000, 3.0])
     ),
     "a point after the period": export(series=price([1_790_805_600_000, 1.0])),
+    "days with a gap": export(days=days(end=1_790_028_000_000 + DAY - 1)),
+    "days short of the period": export(days=days()[:-1]),
 }
 
 

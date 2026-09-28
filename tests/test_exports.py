@@ -253,11 +253,16 @@ def test_each_day_of_the_period_has_its_holidays_with_their_names_cleaned(root: 
     assert named["2026-09-23"]["public_holiday"] == "Jour de test"
     long = named["2026-09-25"]["school_holidays"]
     assert len(long) == LABEL and long.endswith("…")
+    start, end = day_bounds(date(2026, 9, 24))
     assert named["2026-09-24"] == {
         "day": "2026-09-24",
+        "start": ms(start),
+        "end": ms(end),
         "public_holiday": None,
         "school_holidays": None,
     }
+    # Each day starts where the one before ends, over the whole period.
+    assert content["days"][0]["start"] == ms(START) and content["days"][-1]["end"] == ms(END)
 
 
 def test_each_source_is_cited_with_its_licence_and_dates(root: Path) -> None:
