@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -137,8 +139,6 @@ def ingest_source(name: str, *, full: bool) -> int:
 
 def daily() -> int:
     """Ingest every source in turn, as the daily job of the demo does (ADR 028)."""
-    from polars.exceptions import PanicException
-
     from ampere.data.folders import data_root
     from ampere.data.raw import RawStore
 
@@ -149,13 +149,9 @@ def daily() -> int:
         return 1
     failed = []
     for name in SOURCES:
-        try:
-            status = ingest_source(name, full=False)
-        # A bug, an unforeseen response or a panic of Polars stops one source, not the next
-        # ones: they have their own history to keep. The traceback goes to the log.
-        except (Exception, PanicException):
-            log.exception("%s: the ingestion stopped", name)
-            status = 1
+        status = ingest_apart(name)
+        if status < 0:
+            log.error("%s: killed by signal %d", name, -status)
         if status:
             failed.append(name)
     if failed:
@@ -165,3 +161,10 @@ def daily() -> int:
         return 1
     log.info("daily: the %d sources are ingested", len(SOURCES))
     return 0
+
+
+def ingest_apart(name: str) -> int:
+    """Run `ampere ingest <name>` in a process of its own, and return its exit status: negative
+    when a signal killed it. A source that the kernel kills for lack of memory, or that Polars
+    aborts, stops only its own process, and the next sources keep their turn."""
+    return subprocess.run([sys.executable, "-m", "ampere", "ingest", name], check=False).returncode

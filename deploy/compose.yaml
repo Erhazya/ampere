@@ -43,8 +43,9 @@ services:
       AMPERE_DATA: /data
     volumes:
       - ${AMPERE_DATA_DIR:?set in the demo's .env}:/data
-    # Enedis peaks at 0.5 GB when it rebuilds its 36 months; the daily job may use 1 GB (design,
-    # section 8.5), without swap.
+    # Each source runs in a process of its own. Enedis peaks at 0.5 GB when it rebuilds all its
+    # months since July 2023, 39 in September 2026 and one more each month; the daily job may use
+    # 1 GB (design, section 8.5), without swap.
     mem_limit: 1g
     memswap_limit: 1g
     cpus: 1

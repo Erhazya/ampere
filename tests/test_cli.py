@@ -2,13 +2,14 @@
 
 import logging
 import os
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import ANY, Mock
 
-import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
@@ -308,87 +309,76 @@ def test_a_failed_ingestion_goes_up_instead_of_exiting_with_0(
         cli.main(["ingest", "smard"])
 
 
-MODULES: dict[str, ModuleType] = {
-    "smard": smard,
-    "eco2mix": eco2mix,
-    "openmeteo": openmeteo,
-    "enedis": enedis,
-    "calendars": calendars,
-}
+def fake_processes(
+    monkeypatch: pytest.MonkeyPatch, statuses: dict[str, int | BaseException] | None = None
+) -> list[str]:
+    """Replace the process of each source with a fake that records its turn, then returns its
+    exit status or raises its exception: 0 unless statuses says otherwise."""
+    turns: list[str] = []
 
+    def ingest_apart(name: str) -> int:
+        turns.append(name)
+        outcome = (statuses or {}).get(name, 0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
 
-def fake_sources(
-    monkeypatch: pytest.MonkeyPatch, outcomes: dict[str, Report | BaseException] | None = None
-) -> list[tuple[str, dict[str, object]]]:
-    """Replace the ingest() of every source with a fake that records its turn and its options,
-    then returns its report or raises its exception: a clean report unless outcomes says so."""
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def fake(name: str) -> Callable[..., Report]:
-        def ingest(http: object, store: object, clean: Path, **options: object) -> Report:
-            calls.append((name, {"clean": clean, **options}))
-            outcome = (outcomes or {}).get(name, Report())
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return outcome
-
-        return ingest
-
-    for name, module in MODULES.items():
-        monkeypatch.setattr(module, "ingest", fake(name))
-    return calls
+    monkeypatch.setattr(cli, "ingest_apart", ingest_apart)
+    return turns
 
 
 def test_daily_ingests_every_source_in_turn(
     monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="ampere")
-    calls = fake_sources(monkeypatch)
+    turns = fake_processes(monkeypatch)
     assert cli.main(["daily"]) == 0
-    assert [name for name, _ in calls] == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
-    # Each source asks only for what can still change, never for the whole history (ADR 028).
-    for _, options in calls:
-        assert options["clean"] == data / "clean" and options["full"] is False
+    assert turns == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
     assert "daily: the 5 sources are ingested" in caplog.text
 
 
 def test_daily_goes_on_after_a_source_that_fails(
     monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    calls = fake_sources(
-        monkeypatch,
-        {
-            "smard": SchemaError("https://www.smard.de/app/chart_data/254/DE/x.json: no series"),
-            "openmeteo": Report(errors=["run 2026-06-12T00:00: missing"]),
-            "enedis": pl.exceptions.PanicException("index out of bounds"),
-        },
-    )
+    # 1 for an error or an exception of the source, -9 when the kernel kills it, often for lack
+    # of memory.
+    turns = fake_processes(monkeypatch, {"smard": 1, "enedis": -9})
     assert cli.main(["daily"]) == 1
-    assert [name for name, _ in calls] == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
-    # An exception, even a panic of Polars, leaves its traceback in the log.
-    stopped = [record for record in caplog.records if record.exc_info]
-    assert [record.getMessage() for record in stopped] == [
-        "smard: the ingestion stopped",
-        "enedis: the ingestion stopped",
-    ]
-    assert ("ampere", logging.ERROR, "run 2026-06-12T00:00: missing") in caplog.record_tuples
-    assert "daily: 3 of 5 sources failed: smard, openmeteo, enedis" in caplog.text
+    assert turns == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
+    assert ("ampere", logging.ERROR, "enedis: killed by signal 9") in caplog.record_tuples
+    assert "daily: 2 of 5 sources failed: smard, enedis" in caplog.text
 
 
 def test_daily_stops_when_it_is_interrupted(monkeypatch: pytest.MonkeyPatch, data: Path) -> None:
-    calls = fake_sources(monkeypatch, {"eco2mix": KeyboardInterrupt()})
+    turns = fake_processes(monkeypatch, {"eco2mix": KeyboardInterrupt()})
     with pytest.raises(KeyboardInterrupt):
         cli.main(["daily"])
-    assert [name for name, _ in calls] == ["smard", "eco2mix"]
+    assert turns == ["smard", "eco2mix"]
 
 
 def test_daily_needs_a_raw_layer_created_first(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
-    calls = fake_sources(monkeypatch)
+    turns = fake_processes(monkeypatch)
     assert cli.main(["daily"]) == 1
-    assert calls == []
+    assert turns == []
     # One message, not one per source.
     assert caplog.text.count("check AMPERE_DATA and its volume") == 1
     assert not (tmp_path / "unmounted").exists()
+
+
+def test_each_source_runs_as_ampere_ingest_without_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = Mock(return_value=subprocess.CompletedProcess([], 1))
+    monkeypatch.setattr(subprocess, "run", run)
+    assert cli.ingest_apart("enedis") == 1
+    run.assert_called_once_with([sys.executable, "-m", "ampere", "ingest", "enedis"], check=False)
+
+
+def test_a_source_runs_in_a_process_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # A real process, which stops on the missing raw layer before any request.
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
+    assert cli.ingest_apart("smard") == 1
+    assert "check AMPERE_DATA and its volume" in capfd.readouterr().err
