@@ -2,7 +2,7 @@
 
 Le jumeau numérique énergétique d'un quartier de 200 maisons, alimenté par de vraies données publiques françaises.
 
-> **Statut : en construction.** La conception et les fondations sont terminées. La collecte des données est en cours : chaque jour à 14 h, heure de Paris, le serveur récupère et contrôle cinq sources, et garde chaque réponse brute telle que reçue. Un premier écran est en ligne sur <https://ampere.146-19-168-222.sslip.io> : les sept derniers jours et le lendemain du prix spot, de la consommation et de la prévision de RTE, de l'intensité CO₂, du solaire régional et de la température à Lyon, mis à jour chaque jour.
+> **Statut : en construction.** La conception, les fondations et la collecte des données sont terminées : chaque jour à 14 h, heure de Paris, le serveur récupère et contrôle cinq sources, et garde chaque réponse brute telle que reçue. Un [notebook d'exploration](notebooks/exploration.ipynb) montre ce que disent les données. Un premier écran est en ligne sur <https://ampere.146-19-168-222.sslip.io> : les sept derniers jours et le lendemain du prix spot, de la consommation et de la prévision de RTE, de l'intensité CO₂, du solaire régional et de la température à Lyon, mis à jour chaque jour.
 
 [English version](README.md)
 
@@ -33,7 +33,7 @@ Le raisonnement complet est dans la [conception](docs/conception.md), les [déci
 |---|---|---|
 | 0 | Conception | Terminée |
 | 1 | Fondations : dépôt, CI, squelette déployé | Terminée |
-| 2 | Données : ingestion quotidienne et contrôles de qualité | En cours |
+| 2 | Données : ingestion quotidienne et contrôles de qualité | Terminée |
 | 3 | Simulation : maisons, panneaux solaires, batteries | À faire |
 | 4 | Pilotage : règle simple contre MILP | À faire |
 | 5 | Prévisions : références naïves contre LightGBM | À faire |

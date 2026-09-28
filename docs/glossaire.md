@@ -34,11 +34,13 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Prix spot (marché de la veille)** : prix de l'électricité fixé chaque jour vers 13 h par une enchère européenne, pour chaque quart d'heure du lendemain (pour chaque heure avant octobre 2025). Il varie fortement selon l'heure, la saison et la météo, et peut devenir négatif quand la production dépasse largement la demande.
 
-**Profil et puissance souscrite (Enedis)** : Enedis classe les foyers par profil de consommation (par exemple tarif base, ou heures pleines et heures creuses) et par puissance souscrite, c'est-à-dire la puissance maximale autorisée par le contrat (de 3 à 36 kVA). Une puissance élevée signale souvent un grand logement ou un chauffage électrique. Pour chaque segment, Enedis publie le nombre de sites, leur énergie totale, et la courbe moyenne des seuls sites à compteur communicant, avec la part des sites qu'elle représente (ADR 026).
+**Profil et puissance souscrite (Enedis)** : Enedis classe les foyers par profil de consommation (par exemple tarif base, ou heures pleines et heures creuses) et par puissance souscrite, c'est-à-dire la puissance maximale autorisée par le contrat (de 3 à 36 kVA). Une puissance élevée signale souvent un grand logement ou un chauffage électrique. Pour chaque segment, Enedis publie le nombre de sites, leur énergie totale, et la courbe moyenne des seuls sites à compteur communicant, avec la part des sites qu'elle représente (ADR 026). Les profils résidentiels suivent l'option tarifaire : RES1 et RES11 le tarif base, RES2 les heures pleines et heures creuses, RES2WE la même chose avec un tarif du week-end, RES3 l'option Tempo, RES4 l'ancienne option EJP. Deux courbes de plus partagent les foyers en deux moitiés : la n° 2 rassemble ceux qui consomment le plus entre 8 h et 20 h les jours ouvrés, la n° 1 les autres (notebook d'exploration, ADR 030).
 
 **Rayonnement solaire (global, direct, diffus, direct normal)** : puissance du soleil reçue par mètre carré, en W/m². Le rayonnement global, reçu par un plan horizontal, est la somme du direct, venu du disque du soleil, et du diffus, renvoyé par le ciel et les nuages. Le direct normal est celui que reçoit un plan tourné face au soleil. En anglais, ce sont GHI, DHI et DNI : à partir des trois, pvlib calcule ce que reçoit un toit selon son inclinaison et son orientation. Chez Open-Meteo, une valeur horaire est la moyenne de l'heure qui finit à l'instant donné (ADR 025).
 
 **Taux de charge** : production d'une filière divisée par sa puissance installée ; il indique quelle part de sa capacité elle utilise. En moyenne sur l'année, le solaire en France tourne autour de 13 à 15 %, car il ne produit rien la nuit et peu par temps couvert.
+
+**Thermosensibilité** : ce que la consommation gagne quand la température baisse d'un degré. Pour un foyer d'Auvergne-Rhône-Alpes, elle est nulle au-dessus de 15 °C environ, puis vaut 42 W par degré, environ 1 kWh par jour, sur juillet 2023 à juin 2025 (notebook d'exploration).
 
 **Vente du surplus** : mode de raccordement où la maison consomme d'abord sa production solaire et ne vend que le reste. Son injection sur le réseau est donc sa production moins sa consommation.
 
@@ -54,7 +56,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **MAPE (erreur absolue moyenne en pourcentage)** : la même erreur, divisée par la valeur réelle. Elle est trompeuse quand la réalité approche zéro, par exemple pour le solaire la nuit : une erreur minuscule devient un pourcentage énorme, voire une division par zéro. Le projet ne l'utilise donc pas.
 
-**Période de test** : période réservée, jamais utilisée pour régler les modèles, sur laquelle on les juge une seule fois, à la fin. La regarder pendant la mise au point reviendrait à connaître les questions de l'examen à l'avance.
+**Période de test** : période réservée, jamais utilisée pour régler les modèles, sur laquelle on les juge une seule fois, à la fin. La regarder pendant la mise au point reviendrait à connaître les questions de l'examen à l'avance. Le code l'écarte de toute analyse : `ampere.data.periods.scan()` refuse une lecture qui la touche (ADR 030).
 
 **Référence naïve** : la prévision la plus simple possible, comme « la même chose que la semaine dernière à la même heure ». Un modèle ne mérite sa place que s'il fait mieux qu'elle.
 
@@ -163,6 +165,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute, et un autre pour le traitement quotidien d'Ampère, chaque jour à 14 h (ADR 021 et 028).
 
 **Montage** : un dossier du serveur rendu visible dans un conteneur. Le dossier des données d'Ampère est monté en écriture dans le traitement quotidien, et en lecture seule dans l'API, qui ne peut donc ni modifier ni effacer ce qu'elle lit (ADR 028).
+
+**Notebook** : document qui mêle du code, ses résultats (tableaux, graphiques) et le texte qui les lit. Celui d'Ampère, `notebooks/exploration.ipynb`, garde ses sorties pour que GitHub les affiche, et se réexécute de haut en bas avant chaque commit, pour qu'aucune cellule ne dépende d'un état caché (ADR 030).
 
 **ODRÉ (Open Data Réseaux Énergies)** : la plateforme de données ouvertes des gestionnaires de réseaux d'énergie, dont RTE. Elle publie éCO2mix sous Licence Ouverte, par une API sans clé : quatre jeux, national et régional, en temps réel et en consolidé-définitif (ADR 024).
 
