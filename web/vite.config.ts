@@ -14,6 +14,9 @@ export default defineConfig({
   // since the dashboard and the API share one origin (ADR 016). `vite preview` reuses these
   // settings, on its own port, 4173.
   server: { host: '127.0.0.1', port: 5173, strictPort: true, cors: false, proxy: relayToApi },
+  // ECharts, even module by module, weighs about 500 kB (168 kB compressed) in a file of its own,
+  // which only the Data screen loads (ADR 010 and 029): the limit leaves it room to grow a little.
+  build: { chunkSizeWarningLimit: 600 },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

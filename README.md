@@ -2,7 +2,7 @@
 
 A digital twin of a 200-house neighbourhood's energy, fed with real public French data.
 
-> **Status: work in progress.** The design and the foundations are done. The data pipeline is under way: every day at 14:00, Paris time, the server fetches and checks five sources, and keeps each raw response as received. A first skeleton is online at <https://ampere.146-19-168-222.sslip.io>: for now, it only shows whether the API answers.
+> **Status: work in progress.** The design and the foundations are done. The data pipeline is under way: every day at 14:00, Paris time, the server fetches and checks five sources, and keeps each raw response as received. A first screen is online at <https://ampere.146-19-168-222.sslip.io>: the last seven days and tomorrow of the spot price, consumption and RTE's forecast, carbon intensity, regional solar output and temperature in Lyon, updated every day.
 
 [Version française](README.fr.md)
 

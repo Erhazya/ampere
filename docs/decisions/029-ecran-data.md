@@ -1,6 +1,6 @@
 # ADR 029 : l'écran « Data »
 
-- **Statut** : acceptée ; précise l'étape « export pour l'API » de l'ADR 011, et applique les ADR 010 et 018
+- **Statut** : acceptée ; précise l'étape « export pour l'API » de l'ADR 011, et applique les ADR 010 et 018. L'écran suit la maquette Figma du 28 septembre 2026 ; ce qu'il a changé à la maquette est écrit dans la décision
 - **Date** : 28 septembre 2026
 
 ## Contexte
@@ -72,12 +72,18 @@ L'auteur a choisi l'option 1 pour la source des données, la période, la mise e
 
   Chaque point est un instant UTC en millisecondes et une valeur, dans l'unité du nettoyé. Une source absente ou en retard donne une série plus courte ou vide, jamais une erreur de l'export : l'écran montre jusqu'où va chaque série. Un export qui ne peut pas s'écrire fait échouer le traitement.
 - **API** : `GET /api/data/recent` n'ouvre qu'un fichier ordinaire du dossier des données, ni lien ni tube. Elle en contrôle la taille, puis la forme en mode strict : les noms, les licences et les unités sont ceux du code, la période dure dix jours au plus, et les points sont triés dans la période. Elle renvoie ensuite ce qu'elle a lu, avec un ETag. Tant qu'aucun export n'existe, elle répond 503 ; un export refusé aussi, et son journal n'en reprend rien.
-- **Écran** : un graphique par grandeur, empilés sur le même axe du temps, en heure de Paris, avec un curseur commun ; les prévisions en pointillés ; les jours fériés et les vacances en bandes sur chaque graphique ; sous les graphiques, chaque source avec sa licence et sa date. Une maquette Figma précède le code, et les textes sont d'abord en anglais (ADR 010).
+- **Écran** : un graphique par grandeur, empilés sur le même axe du temps, en heure de Paris, avec un curseur commun ; les prévisions en pointillés ; les jours fériés et les vacances en bandes sur chaque graphique ; sous les graphiques, chaque source avec sa licence et sa date. Une maquette Figma précède le code, et les textes sont d'abord en anglais (ADR 010). L'écran est la page d'accueil de la démo ; l'état de l'API passe sur un second écran, `#/status`.
+  - Chaque échelle va de la plus petite valeur à la plus grande, prévision comprise, arrondies à l'unité vers l'extérieur ; le prix, l'intensité CO₂ et le solaire partent de zéro, avec une ligne à zéro. Seules les deux bornes sont écrites, comme sur la maquette.
+  - L'en-tête de chaque graphique donne sa dernière valeur et son heure, et, pour la consommation et la température, ce que la prévision donne pour l'heure de l'export.
+  - ECharts ne fait que dessiner. Le curseur est tenu par React : il suit la souris au quart d'heure près, trace une ligne et un point sur chaque courbe, et une carte donne les valeurs de ce quart d'heure, sans les séries qui n'en ont pas. La carte se place à hauteur de la souris, au-dessus d'elle dans la moitié basse de la fenêtre, et prend toute la largeur sur un écran étroit. Le lien entre graphiques d'ECharts (`echarts.connect`) a été écarté : il retrouve le curseur de chaque graphique par l'indice d'un point du premier, et le cachait sur la température, dont les séries sont plus courtes.
+  - Une vue en tableau donne les mêmes valeurs heure par heure, pour un lecteur d'écran, le clavier, ou qui préfère les nombres.
+  - Une panne n'emporte pas la page. Si le code des graphiques ne se charge pas, ou si ECharts lève une erreur, un message prend leur place et la vue en tableau reste. Si l'API ne répond pas, l'écran en donne la raison, garde l'erreur dans la console du navigateur et propose de réessayer. Un export de plus de 26 heures est signalé, et une source sous Licence Ouverte sans date publiée le dit.
+  - Un export d'exemple, `web/src/test/export-example.json`, doit passer le contrôle de l'API et celui du tableau de bord : une série ou une source ajoutée d'un côté doit l'être de l'autre.
 
 ## Conséquences
 
 - L'API ne charge ni Polars ni DuckDB. DuckDB viendra quand elle devra interroger les résultats et les scénarios.
 - L'écran change une fois par jour, après le traitement de 14 h. Le prix du lendemain y apparaît donc à 14 h, une heure après sa publication.
 - Trois requêtes de plus par passage. La date d'éCO2mix change à chaque mise à jour d'ODRÉ, donc le brut garde environ 400 octets de plus chaque jour ; la fiche de data.gouv.fr, 16 Ko, n'y entre qu'aux changements de ses ressources.
-- Les noms des jours fériés et des vacances s'affichent comme du texte. Dans une infobulle d'ECharts, qui interprète le HTML, ils sont d'abord échappés. L'export borne leur longueur et en retire les caractères de contrôle, et il refuse les nombres non finis ; l'API contrôle de nouveau la forme du fichier. L'infobulle doit fonctionner avec la CSP de la démo, sans `'unsafe-inline'`.
+- Les noms des jours fériés et des vacances s'affichent comme du texte, par React : aucun texte d'une source ne passe par ECharts, dont l'infobulle interprète le HTML. L'export borne leur longueur et en retire les caractères de contrôle, et il refuse les nombres non finis ; l'API contrôle de nouveau la forme du fichier, et le tableau de bord une troisième fois, avant de l'afficher. L'écran fonctionne avec la CSP de la démo, sans `'unsafe-inline'` : vérifié dans Chromium le 28 septembre 2026, sans aucune violation.
 - La période de test (ADR 007) n'est pas concernée : l'écran ne montre que les derniers jours.

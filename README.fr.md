@@ -2,7 +2,7 @@
 
 Le jumeau numérique énergétique d'un quartier de 200 maisons, alimenté par de vraies données publiques françaises.
 
-> **Statut : en construction.** La conception et les fondations sont terminées. La collecte des données est en cours : chaque jour à 14 h, heure de Paris, le serveur récupère et contrôle cinq sources, et garde chaque réponse brute telle que reçue. Un premier squelette est en ligne sur <https://ampere.146-19-168-222.sslip.io> : pour l'instant, il indique seulement si l'API répond.
+> **Statut : en construction.** La conception et les fondations sont terminées. La collecte des données est en cours : chaque jour à 14 h, heure de Paris, le serveur récupère et contrôle cinq sources, et garde chaque réponse brute telle que reçue. Un premier écran est en ligne sur <https://ampere.146-19-168-222.sslip.io> : les sept derniers jours et le lendemain du prix spot, de la consommation et de la prévision de RTE, de l'intensité CO₂, du solaire régional et de la température à Lyon, mis à jour chaque jour.
 
 [English version](README.md)
 

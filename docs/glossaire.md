@@ -76,6 +76,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **ADR (Architecture Decision Record)** : court document qui garde la trace d'une décision : le contexte, les options envisagées, la décision et ses conséquences. Le projet en rédige un par décision importante, dans `docs/decisions/`.
 
+**Ancre d'une adresse** (`#/status`) : la fin d'une adresse, après `#`, que le navigateur garde pour lui et n'envoie pas au serveur. Le tableau de bord y lit l'écran à montrer, sans recharger la page, et l'API n'a pas à connaître ses écrans (ADR 029).
+
 **Apache Arrow** : format de tableau en mémoire, rangé par colonnes, que partagent Polars, DuckDB et pandas. Un tableau passe ainsi de Polars à DuckDB sans être recopié, et vers pandas en une seule copie (ADR 022).
 
 **Attestation de provenance** : document signé qui dit où, quand et à partir de quel code une image a été construite. L'image d'Ampère n'en a pas encore (ADR 020).
@@ -85,6 +87,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Cache du navigateur** : copies des réponses que le navigateur garde pour ne pas les redemander. Avec l'en-tête `Cache-Control: no-cache`, il revérifie la page auprès du serveur à chaque visite, en envoyant l'empreinte de sa copie (l'ETag), et le serveur répond 304 si elle n'a pas changé. Les fichiers de `assets/` du build ont un nom qui change avec leur contenu : le navigateur peut les garder sans risque. Les autres, la page comprise, sont revérifiés à chaque visite (ADR 018). L'API fait de même pour l'export de l'écran « Data » : son ETag est l'empreinte SHA-256 du fichier, et le navigateur ne le retélécharge qu'après le traitement du jour (ADR 029).
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
+
+**Chargement différé** (*lazy loading*) : ne télécharger une partie du code qu'au moment où la page en a besoin. ECharts pèse environ 500 Ko : le build le met dans un fichier à part, que le navigateur ne demande que pour l'écran « Data » (ADR 029).
 
 **Compose (Docker Compose)** : fichier, `compose.yaml`, qui décrit comment lancer les conteneurs d'une application : l'image, le port publié, les limites, les options de sécurité. `docker compose up` crée les conteneurs, ou recrée seulement ceux dont la description a changé. Celui d'Ampère décrit la démo en ligne : l'API, et le traitement quotidien, rangé dans un profil (ADR 021 et 028).
 
@@ -133,6 +137,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Essai de fumée** (*smoke test*) : vérification rapide qu'un programme démarre et répond, avant des tests plus poussés. `deploy/smoke-test.sh` démarre un conteneur de l'image et interroge l'API et le tableau de bord (ADR 020).
 
 **Fichiers statiques** : fichiers envoyés tels quels au navigateur, sans calcul côté serveur : le HTML, le JavaScript, les styles, les polices. `npm run build` produit ceux du tableau de bord dans `web/dist/`, et en ligne l'API les sert (ADR 018).
+
+**Frontière d'erreur** (*error boundary*) : composant React qui remplace par un message la partie de la page où une erreur a été levée ; sans elle, React retire toute la page. L'écran « Data » en a une autour des graphiques, pour garder la vue en tableau, et l'application une autour de chaque écran, pour garder la barre du haut (ADR 029).
 
 **GHCR** (*GitHub Container Registry*) : le registre d'images Docker de GitHub. La CI y publie l'image de la démo à chaque push vers `main` (ADR 020).
 
@@ -187,5 +193,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Secret statistique** : règle qui interdit de publier un agrégat qui trahirait le comportement d'un foyer. Chez Enedis, une courbe moyenne de moins de 5 000 sites relevés n'est publiée à la demi-heure que la semaine ou le jour du pic du mois ; le reste du temps, elle vaut la moyenne de sa journée, recopiée sur 48 demi-heures. Sous 100 sites, elle est masquée. Le nettoyé d'Ampère marque ces valeurs d'un pas de 1 440 minutes (ADR 026).
 
 **Table longue** : une table qui a une ligne par mesure et par instant, avec une colonne qui nomme la mesure, plutôt qu'une colonne par mesure. Chaque ligne porte ainsi son propre pas de temps et sa propre version, et une mesure de plus ne change pas le schéma. Les nettoyés d'éCO2mix, d'Open-Meteo et d'Enedis sont rangés ainsi (ADR 024 à 026).
+
+**Test de contrat** : test qui vérifie que deux programmes s'entendent sur un même format. Un seul export d'exemple, `web/src/test/export-example.json`, doit passer le contrôle de l'API, en Python, et celui du tableau de bord, en TypeScript : une série ajoutée d'un côté sans l'autre fait échouer un test (ADR 029).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke tous les instants en UTC et ne les convertit en heure de Paris qu'à l'affichage ; seuls les calendriers, qui décrivent des journées de Paris, ont une colonne de dates de Paris (ADR 027). Il évite ainsi les pièges des journées de 23 et de 25 heures.
