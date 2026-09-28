@@ -24,7 +24,7 @@ import polars as pl
 from ampere.data.clean import Report, instants_per_day, write_parquet
 from ampere.data.days import day_bounds, every_day, paris_day, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
-from ampere.sources.archive import fetch_json
+from ampere.sources.archive import PAUSE, SINCE, fetch_json
 from ampere.sources.shapes import SchemaError, is_int, is_number, load_json
 
 log = logging.getLogger(__name__)
@@ -38,8 +38,6 @@ MODEL = "ecmwf_ifs"
 # it, in degrees: ECMWF IFS answers from 45.73° N, 4.83° E.
 LATITUDE, LONGITUDE = 45.76, 4.84
 NEAR = 0.1
-# The start of the history, shared by every source.
-SINCE = date(2023, 7, 1)
 # The first 00 UTC run of ECMWF IFS that Open-Meteo keeps (ADR 007).
 FIRST_RUN = date(2024, 3, 14)
 HOUR = timedelta(hours=1)
@@ -48,8 +46,6 @@ ZERO = timedelta(0)
 RUN_HOURS = 48
 # A month can change until this long after its end, as with the other sources.
 SETTLED_AFTER = timedelta(days=14)
-# Seconds between two requests, out of politeness.
-PAUSE = 0.5
 # The largest response accepted: a month weighs 37 kB.
 MAX_BYTES = 1_000_000
 # A run comes about 6 h 30 after its launch: from this hour UTC, the run of the day is late.
@@ -208,7 +204,7 @@ def ingest(
     weather, check it, and replace the clean file if its rows are valid."""
     kept = len(store.receipts(SOURCE))
     today = now.astimezone(UTC).date()
-    history = responses(store)
+    history = store.responses(SOURCE)
     plan: list[tuple[Request, Held]] = []
     errors: list[str] = []
     warnings: list[str] = []
@@ -295,14 +291,6 @@ def fingerprint(content: bytes) -> bytes:
         return json.dumps(body, sort_keys=True).encode()
     except (ValueError, RecursionError):  # not JSON, or nested too deep: every byte counts
         return content
-
-
-def responses(store: RawStore) -> dict[tuple[str, str], list[Receipt]]:
-    """The responses kept for each month and each run, in the order they came."""
-    kept: dict[tuple[str, str], list[Receipt]] = {}
-    for receipt in store.receipts(SOURCE):
-        kept.setdefault((receipt.dataset, receipt.request), []).append(receipt)
-    return kept
 
 
 def readable(store: RawStore, receipts: list[Receipt], request: Request) -> Held | None:

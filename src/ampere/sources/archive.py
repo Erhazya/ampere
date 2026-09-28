@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from datetime import date
 
 import httpx2
 
@@ -11,6 +12,10 @@ from ampere.data.raw import RawStore, Receipt
 log = logging.getLogger(__name__)
 
 JSON = "application/json"
+# The start of the history, the same for every source: the first day of the Enedis window.
+SINCE = date(2023, 7, 1)
+# Seconds between two requests to a source, out of politeness.
+PAUSE = 0.5
 
 
 def fetch(

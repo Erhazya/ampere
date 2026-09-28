@@ -21,7 +21,7 @@ import polars as pl
 from ampere.data.clean import Report, write_parquet
 from ampere.data.days import day_bounds, every_day, paris_day
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
-from ampere.sources.archive import JSON, fetch
+from ampere.sources.archive import JSON, PAUSE, SINCE, fetch
 from ampere.sources.shapes import SchemaError, load_json, read_parquet
 
 log = logging.getLogger(__name__)
@@ -35,10 +35,6 @@ SCHOOL_URL = (
     "fr-en-calendrier-scolaire/exports/parquet"
 )
 PARQUET = "application/parquet"
-# The start of the history, the same for every source.
-SINCE = date(2023, 7, 1)
-# Seconds between the two requests, out of politeness.
-PAUSE = 0.5
 MAX_BYTES = 1_000_000
 # The school calendar of all of France has 2,587 rows in 7 columns: Parquet compresses by itself,
 # and a few kilobytes could unfold into millions of rows.

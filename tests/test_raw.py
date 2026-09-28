@@ -78,6 +78,19 @@ def test_latest_gives_the_last_file_of_each_request_of_a_dataset(store: RawStore
     assert latest[0] == again.receipt != first.receipt
 
 
+def test_responses_groups_the_files_of_a_source_by_dataset_and_request(store: RawStore) -> None:
+    first = save(store, b"[1]", request="https://example.test/a")
+    other = save(store, b"[2]", request="https://example.test/b")
+    index = save(store, b"[3]", request="https://example.test/a", dataset="index")
+    again = save(store, b"[4]", RECEIVED + timedelta(hours=1), request="https://example.test/a")
+    assert store.responses("smard") == {
+        ("prices", "https://example.test/a"): [first.receipt, again.receipt],
+        ("prices", "https://example.test/b"): [other.receipt],
+        ("index", "https://example.test/a"): [index.receipt],
+    }
+    assert store.responses("eco2mix") == {}
+
+
 def test_the_manifest_records_each_file(store: RawStore) -> None:
     receipt = save(store, b"[1, 2]").receipt
     lines = manifest_text(store).splitlines()

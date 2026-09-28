@@ -33,19 +33,15 @@ from ampere.data.days import (
     quarter_hours,
 )
 from ampere.data.raw import DamagedRawFile, RawStore
-from ampere.sources.archive import fetch_json
-from ampere.sources.shapes import SchemaError, is_number, load_json
+from ampere.sources.archive import PAUSE, SINCE, fetch_json
+from ampere.sources.shapes import SchemaError, is_number, load_json, utc_instant
 
 log = logging.getLogger(__name__)
 
 SOURCE = "eco2mix"
 API = "https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets"
-# The start of the history: the first day of the Enedis window, shared by every source.
-SINCE = date(2023, 7, 1)
 # A month can change until this long after its end, like a week of SMARD (ADR 023).
 SETTLED_AFTER = timedelta(days=14)
-# Seconds between two requests, out of politeness.
-PAUSE = 0.5
 # The largest response accepted: a month of national data weighs 2.6 MB.
 MAX_BYTES = 20_000_000
 # Real time comes about an hour late: later than this, its feed has stopped.
@@ -628,11 +624,7 @@ def invalid_rows(measures: pl.DataFrame, *, now: datetime) -> list[str]:
 
 def instant(value: object, url: str, name: str) -> datetime:
     """An instant of ODRÉ, written in ISO 8601 with its offset, in UTC."""
-    if isinstance(value, str):
-        try:
-            moment = datetime.fromisoformat(value)
-            if moment.utcoffset() is not None:
-                return moment.astimezone(UTC)
-        except (ValueError, OverflowError):
-            pass
-    raise SchemaError(f"{url}: unexpected {name} {value!r}")
+    moment = utc_instant(value)
+    if moment is None:
+        raise SchemaError(f"{url}: unexpected {name} {value!r}")
+    return moment

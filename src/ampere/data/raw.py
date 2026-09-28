@@ -179,6 +179,14 @@ class RawStore:
         """Every file kept for a source, in the order they were kept."""
         return list(self.load(source).receipts)
 
+    def responses(self, source: str) -> dict[tuple[str, str], list[Receipt]]:
+        """Every file kept for a source, by dataset and request, each in the order they were
+        kept."""
+        kept: dict[tuple[str, str], list[Receipt]] = {}
+        for receipt in self.load(source).receipts:
+            kept.setdefault((receipt.dataset, receipt.request), []).append(receipt)
+        return kept
+
     def last(self, source: str, dataset: str, request: str) -> Receipt | None:
         """The latest file kept for a request, if any."""
         return self.load(source).last.get((dataset, request))

@@ -1,5 +1,6 @@
 """The `ampere` command line."""
 
+import inspect
 import logging
 import os
 import subprocess
@@ -201,7 +202,6 @@ def test_ingest_passes_the_time_of_the_run_in_utc_and_the_full_option(
     assert first["full"] is False and second["full"] is True
     # The history starts where ADR 023 says, and no option shortens it.
     assert "since" not in first
-    assert date(2023, 7, 1) == smard.SINCE
     assert f"data folder: {data}" in caplog.text
     assert "smard: 0 invalid rows, 0 errors, 0 warnings" in caplog.text
 
@@ -215,7 +215,6 @@ def test_ingest_eco2mix_runs_its_own_source(
     assert cli.main(["ingest", "eco2mix", "--full"]) == 0
     assert prices == []
     assert measures[0]["clean"] == data / "clean" and measures[0]["full"] is True
-    assert date(2023, 7, 1) == eco2mix.SINCE
     assert ("ampere", logging.WARNING, "real time: no consumption") in caplog.record_tuples
     assert "eco2mix: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
@@ -231,7 +230,7 @@ def test_ingest_openmeteo_runs_its_own_source(
     assert weather[0]["clean"] == data / "clean" and weather[0]["full"] is False
     # The history and the first run are those of ADR 025, and no option changes them.
     assert "since" not in weather[0] and "first_run" not in weather[0]
-    assert (date(2023, 7, 1), date(2024, 3, 14)) == (openmeteo.SINCE, openmeteo.FIRST_RUN)
+    assert date(2024, 3, 14) == openmeteo.FIRST_RUN
     assert ("ampere", logging.ERROR, "run 2026-06-12T00:00: missing") in caplog.record_tuples
     assert "openmeteo: 0 invalid rows, 1 errors, 0 warnings" in caplog.text
 
@@ -247,7 +246,6 @@ def test_ingest_enedis_runs_its_own_source(
     assert prices == []
     assert curves[0]["clean"] == data / "clean" and curves[0]["full"] is True
     assert "since" not in curves[0]
-    assert date(2023, 7, 1) == enedis.SINCE
     assert ("ampere", logging.WARNING, empty) in caplog.record_tuples
     assert "enedis: 0 invalid rows, 0 errors, 1 warnings" in caplog.text
 
@@ -262,9 +260,14 @@ def test_ingest_calendars_runs_its_own_source(
     assert prices == []
     assert days[0]["clean"] == data / "clean" and days[0]["full"] is False
     assert "since" not in days[0]
-    assert date(2023, 7, 1) == calendars.SINCE
     assert ("ampere", logging.ERROR, "calendars: no day known") in caplog.record_tuples
     assert "calendars: 0 invalid rows, 1 errors, 0 warnings" in caplog.text
+
+
+@pytest.mark.parametrize("source", [smard, eco2mix, openmeteo, enedis, calendars])
+def test_every_source_starts_its_history_on_1_july_2023(source: ModuleType) -> None:
+    # The command never passes since: each source's own default decides.
+    assert inspect.signature(source.ingest).parameters["since"].default == date(2023, 7, 1)
 
 
 def test_ingest_has_no_option_to_shorten_the_history() -> None:

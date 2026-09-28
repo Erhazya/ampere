@@ -18,7 +18,7 @@ import polars as pl
 from ampere.data.clean import Report, instants_per_day, write_parquet
 from ampere.data.days import PARIS, QUARTER_HOUR, day_bounds, every_day, paris_day, quarter_hours
 from ampere.data.raw import DamagedRawFile, RawStore
-from ampere.sources.archive import fetch_json
+from ampere.sources.archive import PAUSE, SINCE, fetch_json
 from ampere.sources.shapes import SchemaError, is_int, is_number, load_json
 
 log = logging.getLogger(__name__)
@@ -27,16 +27,12 @@ SOURCE = "smard"
 # Filter 254, "Marktpreis: Frankreich", in the chart data of SMARD's German site.
 BASE = "https://www.smard.de/app/chart_data/254/DE"
 HOUR, QUARTER = "hour", "quarterhour"
-# The start of the history: the first day of the Enedis window, shared by every source.
-SINCE = date(2023, 7, 1)
 # 1 October 2025 at midnight in Paris: the market's first day of prices by the quarter-hour.
 QUARTER_HOURS_FROM = datetime(2025, 9, 30, 22, tzinfo=UTC)
 # The limits of the European day-ahead market (-500 and 4,000 €/MWh), with some room.
 LOWEST, HIGHEST = -500.0, 5000.0
 # A week can change until this long after its end: SMARD regenerates some files days later.
 SETTLED_AFTER = timedelta(days=14)
-# Seconds between two weekly files, out of politeness.
-PAUSE = 0.5
 # The largest response accepted: SMARD's weekly files weigh about 15 kB, its index 9 kB.
 MAX_BYTES = 1_000_000
 # After this hour in Paris, tomorrow's prices should be out.
