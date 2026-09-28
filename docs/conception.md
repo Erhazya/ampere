@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 à 3 (ADR 012 à 031).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 à 3 (ADR 012 à 032).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 
@@ -522,6 +522,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [029](decisions/029-ecran-data.md) | L'écran « Data » : export quotidien, API et graphiques empilés | Acceptée |
 | [030](decisions/030-notebook-d-exploration.md) | Le notebook d'exploration : Jupyter, et un garde-fou pour la période de test | Acceptée |
 | [031](decisions/031-le-quartier-simule.md) | Le quartier simulé : les foyers, leur variabilité, les équipements et les jours récents | Acceptée |
+| [032](decisions/032-production-solaire-calee-sur-pvgis.md) | La production solaire, calculée avec pvlib et calée sur PVGIS | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
