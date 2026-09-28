@@ -318,3 +318,19 @@ def test_a_table_that_does_not_read_is_an_error_and_the_rest_is_exported(root: P
     content = json.loads((root / EXPORT).read_bytes())
     assert series(content, "price") == []
     assert len(series(content, "co2")) > 0
+
+
+def test_a_table_of_another_shape_is_an_error_and_the_rest_is_exported(root: Path) -> None:
+    path = root / "clean" / "eco2mix" / "measures.parquet"
+    write_parquet(pl.read_parquet(path).rename({"measure": "quantity"}), path)
+    prices = root / "clean" / "smard" / "prices.parquet"
+    frame = pl.read_parquet(prices)
+    write_parquet(frame.with_columns(pl.col("price_eur_per_mwh").cast(pl.String)), prices)
+    report = write_export(root, NOW)
+    assert [error.split(":")[0] for error in report.errors] == [
+        f"{prices} has another shape, in price_eur_per_mwh",
+        f'{path} does not read (unable to find column "measure"; valid columns',
+    ]
+    content = json.loads((root / EXPORT).read_bytes())
+    assert series(content, "price") == series(content, "co2") == []
+    assert len(series(content, "temperature")) > 0

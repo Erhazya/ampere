@@ -28,6 +28,32 @@ ECO2MIX = (
     ("solar", "ARA", "solar_mw"),
 )
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+# The columns the export reads from each clean table, and what each holds.
+INSTANT, TEXT, NUMBER, DAY = "instant", "text", "number", "day"
+PRICES = {"start": INSTANT, "price_eur_per_mwh": NUMBER, "received_at": INSTANT}
+MEASURES = {
+    "start": INSTANT,
+    "area": TEXT,
+    "measure": TEXT,
+    "value": NUMBER,
+    "received_at": INSTANT,
+}
+WEATHER = {
+    "time": INSTANT,
+    "variable": TEXT,
+    "value": NUMBER,
+    "kind": TEXT,
+    "run": INSTANT,
+    "received_at": INSTANT,
+}
+DAYS = {
+    "day": DAY,
+    "public_holiday": TEXT,
+    "school_holidays": TEXT,
+    "public_holiday_received_at": INSTANT,
+    "school_holidays_received_at": INSTANT,
+}
+UPDATED = {"dataset": TEXT, "updated_at": INSTANT, "received_at": INSTANT}
 
 
 def period(now: datetime) -> tuple[datetime, datetime]:
@@ -64,11 +90,11 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
     received: dict[str, datetime | None] = {}
     series = []
 
-    prices = within(table(clean / "smard" / "prices.parquet", report), "start", start, end)
+    prices = within(table(clean / "smard" / "prices.parquet", report, PRICES), "start", start, end)
     series.append(entry("price", prices, "start", "price_eur_per_mwh"))
     received["smard"] = latest(prices)
 
-    measures = table(clean / "eco2mix" / "measures.parquet", report)
+    measures = table(clean / "eco2mix" / "measures.parquet", report, MEASURES)
     used = []
     for name, area, measure in ECO2MIX:
         rows = within(
@@ -83,7 +109,9 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
         used.append(rows)
     received["eco2mix"] = latest(*used)
 
-    observed, forecast = temperatures(table(clean / "openmeteo" / "weather.parquet", report))
+    observed, forecast = temperatures(
+        table(clean / "openmeteo" / "weather.parquet", report, WEATHER)
+    )
     observed = within(observed, "time", start, end)
     forecast = within(forecast, "time", start, end)
     series.append(entry("temperature", observed, "time", "value"))
@@ -91,7 +119,7 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
     received["openmeteo"] = latest(observed, forecast)
 
     first, last = paris_day(start), paris_day(end - timedelta(microseconds=1))
-    calendar = table(clean / "calendars" / "days.parquet", report)
+    calendar = table(clean / "calendars" / "days.parquet", report, DAYS)
     named = (
         {}
         if calendar is None
@@ -141,17 +169,39 @@ def build(clean: Path, now: datetime, report: Report) -> dict[str, Any]:
     }
 
 
-def table(path: Path, report: Report) -> pl.DataFrame | None:
-    """A clean table; None when it is missing, with a warning, or does not read, with an error."""
+def table(path: Path, report: Report, columns: dict[str, str]) -> pl.DataFrame | None:
+    """The columns the export reads from a clean table; None when the table is missing, with a
+    warning, or when it does not read or has another shape, with an error. Only the series of
+    that table are then left out."""
     if not path.exists():
-        report.warnings.append(f"{path} is missing: its series are left empty")
+        report.warnings.append(f"{path} is missing: what it holds is left out")
         return None
     try:
-        return pl.read_parquet(path)
+        frame = pl.read_parquet(path, columns=list(columns))
     # Polars may even panic on a damaged file, and its panic is a BaseException.
     except (OSError, pl.exceptions.PolarsError, pl.exceptions.PanicException) as error:
-        report.errors.append(f"{path} does not read ({error}): its series are left empty")
+        report.errors.append(f"{path} does not read ({error}): what it holds is left out")
         return None
+    wrong = [name for name, kind in columns.items() if kind_of(frame.schema[name]) != kind]
+    if wrong:
+        report.errors.append(
+            f"{path} has another shape, in {', '.join(wrong)}: what it holds is left out"
+        )
+        return None
+    return frame
+
+
+def kind_of(dtype: pl.DataType) -> str | None:
+    """What a column holds, as far as the export compares and writes it."""
+    if isinstance(dtype, pl.Datetime) and dtype.time_zone == "UTC":
+        return INSTANT
+    if isinstance(dtype, pl.String | pl.Categorical | pl.Enum):
+        return TEXT
+    if dtype.is_float():
+        return NUMBER
+    if isinstance(dtype, pl.Date):
+        return DAY
+    return None
 
 
 def within(frame: pl.DataFrame | None, column: str, start: datetime, end: datetime) -> pl.DataFrame:
@@ -195,7 +245,7 @@ def update_dates(clean: Path, report: Report) -> dict[str, datetime]:
     """The date each dataset was last updated, as its source published it (ADR 029)."""
     dates: dict[str, datetime] = {}
     for source in ("eco2mix", "calendars"):
-        updates = table(clean / source / "updates.parquet", report)
+        updates = table(clean / source / "updates.parquet", report, UPDATED)
         if updates is not None:
             dates.update(updates.select("dataset", "updated_at").rows())
     return dates
