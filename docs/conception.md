@@ -1,6 +1,6 @@
 # Ampère : conception
 
-> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 et 2 (ADR 012 à 030).
+> **Statut** : validée le 23 septembre 2026, à la fin de l'étape 0 ; complétée aux étapes 1 à 3 (ADR 012 à 031).
 
 Ce document décrit ce que le projet doit faire, pour qui, avec quelles contraintes et selon quelle architecture. Chaque décision importante est détaillée dans un ADR (`docs/decisions/`), et chaque notion technique est expliquée dans le [glossaire](glossaire.md).
 
@@ -126,7 +126,7 @@ Un modèle de substitution (un réseau de neurones qui imite le simulateur, pour
 3. On y ajoute une variabilité propre au foyer : un facteur d'échelle, de petits décalages d'horaires, des pics d'appareils. Une moyenne de milliers de foyers est lisse, alors qu'une vraie maison a des pics (four, lave-linge) qui comptent pour une batterie.
 4. Un test vérifie que cette variabilité ne déforme pas le total : la somme des 200 maisons reste proche de 200 fois la courbe réelle.
 
-Le tirage au sort utilise une graine fixe : le même quartier est reconstruit à chaque exécution. La méthode précise et ses paramètres seront fixés à l'étape 3 (simulation).
+Le tirage au sort utilise une graine fixe : le même quartier est reconstruit à chaque exécution. L'ADR 031 fixe la méthode : les maisons sont tirées parmi les segments complets de plus de 6 kVA, chacune suit la courbe n° 1 ou n° 2 de son segment, avec un facteur d'échelle et un décalage d'horaire ; les pointes d'appareils attendent la version complète.
 
 **Du pas de 30 min au pas de 15 min** *(ADR 005)*. La simulation tourne au pas de 15 min, mais Enedis publie au pas de 30 min. Chaque demi-heure devient donc deux quarts d'heure de même puissance, ce qui conserve exactement l'énergie mesurée ; la variabilité par foyer ajoute ensuite le détail. Les prévisions de consommation sont notées sur des sommes de 30 min, le pas des vraies données, pour ne jamais noter du détail inventé.
 
@@ -140,7 +140,7 @@ Le tirage au sort utilise une graine fixe : le même quartier est reconstruit à
 
 - **Panneaux solaires** sur une partie des toits (paramètre de scénario). Leur taille, leur orientation et leur inclinaison varient d'une maison à l'autre.
 - **Batteries** dans une partie des maisons équipées de panneaux (paramètre de scénario). Chacune est définie par sa capacité (kWh), sa puissance maximale (kW) et son rendement, c'est-à-dire la part de l'énergie stockée que l'on récupère.
-- Les valeurs par défaut (part des toits équipés, tailles typiques) seront fixées et sourcées à l'étape 3.
+- Le scénario de référence (ADR 031) : 30 % des toits équipés, soit 60 maisons, pour moitié en 3 kWc et pour moitié en 6 kWc, dont la moitié avec une batterie de 5 ou de 10 kWh. La puissance et le rendement des batteries, et leurs sources, sont fixés à l'incrément 3.3.
 - Les voitures électriques et les pompes à chaleur arrivent avec la version complète.
 
 > **kW ou kWh ?** Le kW mesure une puissance, c'est-à-dire un débit ; le kWh mesure une énergie, c'est-à-dire une quantité. Une batterie de 10 kWh qui débite 5 kW se vide en 2 heures. La puissance d'un panneau s'exprime en kWc (kilowatt-crête) : ce qu'il produit en plein soleil, dans des conditions standard.
@@ -521,6 +521,7 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 | [028](decisions/028-traitement-quotidien-en-ligne.md) | Le traitement quotidien en ligne | Acceptée |
 | [029](decisions/029-ecran-data.md) | L'écran « Data » : export quotidien, API et graphiques empilés | Acceptée |
 | [030](decisions/030-notebook-d-exploration.md) | Le notebook d'exploration : Jupyter, et un garde-fou pour la période de test | Acceptée |
+| [031](decisions/031-le-quartier-simule.md) | Le quartier simulé : les foyers, leur variabilité, les équipements et les jours récents | Acceptée |
 
 **Décisions mineures, sans ADR** : interface de la v1 en anglais, avec des textes regroupés pour ajouter le français sans réécriture ; licence MIT ; brief et prompts de travail conservés en local, hors du dépôt public.
 
@@ -533,9 +534,8 @@ Chaque ADR présente le contexte, les options envisagées avec leurs avantages e
 
 | Question | Quand |
 |---|---|
-| Modèle d'estimation des jours récents : lequel, et comment le valider ? La température et le calendrier, peut-être la consommation nationale de RTE (notebook d'exploration) | Étape 3 |
-| Méthode et paramètres de la variabilité par foyer | Étape 3 |
-| Valeurs par défaut des équipements (part des toits équipés, tailles des batteries) et leurs sources | Étape 3 |
+| Écart du facteur d'échelle de la variabilité par foyer (ADR 031) | Incrément 3.2 |
+| Puissance et rendement des batteries, et leurs sources (ADR 031) | Incrément 3.3 |
 | Montants de la facture (acheminement, accise, TVA, tarif d'achat), relevés et datés | Étape 4 |
 | Faut-il mettre les économies en regard du prix d'une batterie ? Proposition : oui, en ordre de grandeur | Étape 4 |
 | Scénarios du tableau de bord : calcul à la volée (règle simple, rapide) ou grille précalculée (MILP) ? | Étape 6 |
