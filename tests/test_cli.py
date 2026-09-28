@@ -2,6 +2,8 @@
 
 import logging
 import os
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -305,3 +307,78 @@ def test_a_failed_ingestion_goes_up_instead_of_exiting_with_0(
     monkeypatch.setattr(smard, "ingest", ingest)
     with pytest.raises(SchemaError):
         cli.main(["ingest", "smard"])
+
+
+def fake_processes(
+    monkeypatch: pytest.MonkeyPatch, statuses: dict[str, int | BaseException] | None = None
+) -> list[str]:
+    """Replace the process of each source with a fake that records its turn, then returns its
+    exit status or raises its exception: 0 unless statuses says otherwise."""
+    turns: list[str] = []
+
+    def ingest_apart(name: str) -> int:
+        turns.append(name)
+        outcome = (statuses or {}).get(name, 0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(cli, "ingest_apart", ingest_apart)
+    return turns
+
+
+def test_daily_ingests_every_source_in_turn(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ampere")
+    turns = fake_processes(monkeypatch)
+    assert cli.main(["daily"]) == 0
+    assert turns == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
+    assert "daily: the 5 sources are ingested" in caplog.text
+
+
+def test_daily_goes_on_after_a_source_that_fails(
+    monkeypatch: pytest.MonkeyPatch, data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # 1 for an error or an exception of the source, -9 when the kernel kills it, often for lack
+    # of memory.
+    turns = fake_processes(monkeypatch, {"smard": 1, "enedis": -9})
+    assert cli.main(["daily"]) == 1
+    assert turns == ["smard", "eco2mix", "openmeteo", "enedis", "calendars"]
+    assert ("ampere", logging.ERROR, "enedis: killed by signal 9") in caplog.record_tuples
+    assert "daily: 2 of 5 sources failed: smard, enedis" in caplog.text
+
+
+def test_daily_stops_when_it_is_interrupted(monkeypatch: pytest.MonkeyPatch, data: Path) -> None:
+    turns = fake_processes(monkeypatch, {"eco2mix": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["daily"])
+    assert turns == ["smard", "eco2mix"]
+
+
+def test_daily_needs_a_raw_layer_created_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
+    turns = fake_processes(monkeypatch)
+    assert cli.main(["daily"]) == 1
+    assert turns == []
+    # One message, not one per source.
+    assert caplog.text.count("check AMPERE_DATA and its volume") == 1
+    assert not (tmp_path / "unmounted").exists()
+
+
+def test_each_source_runs_as_ampere_ingest_without_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = Mock(return_value=subprocess.CompletedProcess([], 1))
+    monkeypatch.setattr(subprocess, "run", run)
+    assert cli.ingest_apart("enedis") == 1
+    run.assert_called_once_with([sys.executable, "-m", "ampere", "ingest", "enedis"], check=False)
+
+
+def test_a_source_runs_in_a_process_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # A real process, which stops on the missing raw layer before any request.
+    monkeypatch.setenv("AMPERE_DATA", str(tmp_path / "unmounted"))
+    assert cli.ingest_apart("smard") == 1
+    assert "check AMPERE_DATA and its volume" in capfd.readouterr().err

@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 27 septembre 2026 (étape 2, ADR 026).
+> Dernière mise à jour : 28 septembre 2026 (étape 2, ADR 028).
 
 ## Énergie et marché de l'électricité
 
@@ -86,11 +86,13 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **CC BY 4.0** : licence Creative Commons qui autorise à copier, republier et modifier des données, y compris à des fins commerciales, à condition de citer la source et d'indiquer les modifications apportées.
 
-**Compose (Docker Compose)** : fichier, `compose.yaml`, qui décrit comment lancer les conteneurs d'une application : l'image, le port publié, les limites, les options de sécurité. `docker compose up` crée les conteneurs, ou recrée seulement ceux dont la description a changé. Celui d'Ampère décrit la démo en ligne (ADR 021).
+**Compose (Docker Compose)** : fichier, `compose.yaml`, qui décrit comment lancer les conteneurs d'une application : l'image, le port publié, les limites, les options de sécurité. `docker compose up` crée les conteneurs, ou recrée seulement ceux dont la description a changé. Celui d'Ampère décrit la démo en ligne : l'API, et le traitement quotidien, rangé dans un profil (ADR 021 et 028).
 
 **Construction en plusieurs étapes** (*multi-stage build*) : un Dockerfile qui enchaîne plusieurs images. Les premières construisent, avec leurs outils (Node, uv), et la dernière reprend le résultat sans ces outils : l'image publiée ne contient ni Node ni uv (ADR 020).
 
 **Conteneur, image Docker** : une image réunit un programme et tout ce dont il a besoin pour tourner, de l'interpréteur Python aux fichiers du tableau de bord. Un conteneur est cette image en train de tourner, isolée du reste du serveur. Un Dockerfile décrit comment construire l'image (ADR 020).
+
+**Conteneur ponctuel** : un conteneur lancé pour une seule tâche, puis supprimé. `docker compose run --rm daily` démarre ainsi le service `daily` de la démo, qui disparaît à la fin du traitement : le traitement tourne sur l'image de la démo, sans occuper de mémoire le reste de la journée (ADR 028).
 
 **Contexte de construction** : les fichiers que `docker build` envoie au moteur de construction, et que le Dockerfile peut copier. Le fichier `.dockerignore` en écarte tout ce qui n'est pas utile, comme les notes locales ou l'environnement virtuel (ADR 020).
 
@@ -140,6 +142,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Idempotent** : se dit d'une opération qu'on peut relancer sans changer le résultat. Par exemple, ingérer deux fois la même journée ne crée pas de doublon.
 
+**Identifiant subordonné** : en Docker rootless, l'utilisateur 0 d'un conteneur est le compte qui fait tourner Docker, et ses autres utilisateurs sont des identifiants réservés à ce compte sur le serveur. L'utilisateur de l'image d'Ampère y a ainsi un numéro sans nom : les fichiers que le traitement écrit lui appartiennent, et seul un conteneur peut les lui attribuer (ADR 028).
+
 **Intégration continue (CI)** : contrôles lancés automatiquement, sur une machine neuve, à chaque modification proposée. Ici, un workflow GitHub Actions, un fichier de `.github/workflows/`, fait tourner, sur chaque pull request et chaque push vers `main`, les mêmes commandes qu'en développement. Il a deux jobs, c'est-à-dire deux suites d'étapes qui tournent chacune sur sa propre machine : un pour le Python, un pour le tableau de bord (ADR 019).
 
 **Jumeau numérique** : modèle informatique d'un système réel, soumis aux mêmes conditions que lui, qui permet de tester des décisions sans toucher au monde réel.
@@ -150,7 +154,9 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Manifeste** : le registre d'une source dans la couche brute, `manifest.jsonl`. Il compte une ligne par fichier reçu : ce qui a été demandé, d'où vient la réponse, où le fichier est rangé, quand il est arrivé, et son empreinte SHA-256 (ADR 022).
 
-**Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute (ADR 021).
+**Minuteur systemd** : planificateur intégré à Linux, qui lance une tâche à heure fixe. Avec l'option `Persistent`, il rattrape une exécution manquée pendant un arrêt du serveur. La plateforme du portfolio en a un par démo, qui lance le déploiement chaque minute, et un autre pour le traitement quotidien d'Ampère, chaque jour à 14 h (ADR 021 et 028).
+
+**Montage** : un dossier du serveur rendu visible dans un conteneur. Le dossier des données d'Ampère est monté en écriture dans le traitement quotidien, et en lecture seule dans l'API, qui ne peut donc ni modifier ni effacer ce qu'elle lit (ADR 028).
 
 **ODRÉ (Open Data Réseaux Énergies)** : la plateforme de données ouvertes des gestionnaires de réseaux d'énergie, dont RTE. Elle publie éCO2mix sous Licence Ouverte, par une API sans clé : quatre jeux, national et régional, en temps réel et en consolidé-définitif (ADR 024).
 
@@ -163,6 +169,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Point de santé (`/healthz`)** : route qui répond tant que le processus tourne. La plateforme du portfolio l'interroge pour savoir si une démo est en vie. Le tableau de bord interroge la même fonction sous `/api/healthz` pour afficher l'état de l'API, et le contrôle de santé de l'image Docker l'interroge en GET toutes les 30 secondes (ADR 020).
 
 **Polars** : bibliothèque de tableaux de données écrite en Rust, rapide et stricte sur les types, notamment les dates avec leur fuseau et les valeurs manquantes. Le projet l'utilise pour ses données, et ne passe à pandas que pour les bibliothèques qui l'exigent, comme pvlib (ADR 022).
+
+**Profil (Compose)** : une étiquette qui range un service à part dans le fichier Compose. `docker compose up` ne démarre pas un service rangé dans un profil qu'on ne lui a pas nommé, mais `docker compose run` le lance quand on le lui demande. Le traitement quotidien est ainsi dans le profil `jobs` : le déploiement ne le démarre jamais, et le minuteur le lance une fois par jour (ADR 028).
 
 **Rattrapage** : ce que fait l'ingestion quand des données manquent dans l'archive, après une panne ou au premier passage : elle demande ce qui manque, en plus des jours récents, qu'une source peut encore corriger. Pour SMARD, une semaine est redemandée jusqu'à 14 jours après sa fin, puis tant que le brut n'en a pas une réponse lisible et complète (ADR 023). Pour éCO2mix, un mois est redemandé de la même façon, et aussi quand ODRÉ en publie une version plus avancée (ADR 024). Pour Open-Meteo, un mois de météo observée suit la règle de SMARD, et un run n'est redemandé que tant que le brut n'en a pas une réponse lisible et complète, sauf six runs qu'Open-Meteo n'a pas, listés, que seul `--full` redemande (ADR 025). Pour Enedis, qui publie chaque trimestre, tous les mois sont redemandés pendant les 7 jours qui suivent une nouvelle publication ; le reste du temps, un mois l'est tant que le brut n'en a pas de réponse lisible, ou qu'elle est vide alors que le mois est dans les trois ans publiés (ADR 026).
 
