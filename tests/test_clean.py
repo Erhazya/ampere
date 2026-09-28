@@ -1,13 +1,13 @@
 """The parts of the clean layer that every source shares."""
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 import pytest
 
-from ampere.data.clean import Report, instants_per_day, write_parquet
+from ampere.data.clean import UPDATES, Report, instants_per_day, write_parquet, write_updates
 from ampere.data.days import day_bounds
 
 
@@ -64,3 +64,60 @@ def test_hours_are_counted_in_any_column() -> None:
     frame = pl.DataFrame({"time": [*hours, hours[5] + timedelta(minutes=15)]})
     counts = instants_per_day(frame, column="time", every="1h")
     assert counts.rows() == [(date(2026, 3, 29), 23)]
+
+
+def test_write_updates_keeps_the_dates_it_is_not_given(tmp_path: Path) -> None:
+    path = tmp_path / "source" / "updates.parquet"
+    first = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    write_updates(
+        {
+            "b": (datetime(2026, 9, 18, tzinfo=UTC), first),
+            "a": (datetime(2026, 9, 1, tzinfo=UTC), first),
+        },
+        path,
+        known=("a", "b"),
+    )
+    later = first + timedelta(days=1)
+    write_updates({"b": (datetime(2026, 9, 29, tzinfo=UTC), later)}, path, known=("a", "b"))
+    frame = pl.read_parquet(path)
+    assert frame.schema == UPDATES
+    assert frame.rows() == [
+        ("a", datetime(2026, 9, 1, tzinfo=UTC), first),
+        ("b", datetime(2026, 9, 29, tzinfo=UTC), later),
+    ]
+
+
+def test_write_updates_forgets_a_dataset_the_source_no_longer_asks_for(tmp_path: Path) -> None:
+    path = tmp_path / "updates.parquet"
+    moment = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    write_updates({"old": (moment, moment), "a": (moment, moment)}, path, known=("old", "a"))
+    write_updates({"a": (moment, moment)}, path, known=("a",))
+    assert pl.read_parquet(path)["dataset"].to_list() == ["a"]
+
+
+def test_write_updates_writes_over_a_file_that_does_not_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "updates.parquet"
+    path.write_bytes(b"not parquet")
+    moment = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    write_updates({"a": (moment, moment)}, path, known=("a",))
+    assert pl.read_parquet(path).rows() == [("a", moment, moment)]
+    assert "does not read" in caplog.text
+
+
+def test_write_updates_writes_over_a_file_that_makes_polars_panic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "updates.parquet"
+    moment = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    write_updates({"a": (moment, moment)}, path, known=("a", "b"))
+
+    def panic(*args: object, **options: object) -> pl.DataFrame:
+        raise pl.exceptions.PanicException("index out of bounds")
+
+    monkeypatch.setattr(pl, "read_parquet", panic)
+    write_updates({"b": (moment, moment)}, path, known=("a", "b"))
+    monkeypatch.undo()
+    assert pl.read_parquet(path)["dataset"].to_list() == ["b"]
+    assert "does not read" in caplog.text

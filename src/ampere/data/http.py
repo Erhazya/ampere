@@ -36,6 +36,10 @@ class UnexpectedResponse(Exception):
     """An answer that is not what the source should send, kept out of the raw layer."""
 
 
+# What get() raises when a request fails: a source that can do without a response catches these.
+REQUEST_FAILURES = (httpx2.HTTPError, UnexpectedResponse, TimeoutError)
+
+
 @dataclass(frozen=True)
 class Fetched:
     """A response as received: its body, the URL it came from after redirects, and its type."""

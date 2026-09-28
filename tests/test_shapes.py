@@ -1,10 +1,10 @@
 """The checks every source makes on the shape of its responses."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ampere.sources.shapes import utc_instant
+from ampere.sources.shapes import update_date, utc_instant
 
 
 @pytest.mark.parametrize(
@@ -37,3 +37,26 @@ def test_an_iso_instant_with_its_offset_is_read_in_utc(value: str, expected: dat
 )
 def test_anything_else_is_no_instant(value: object) -> None:
     assert utc_instant(value) is None
+
+
+NOW = datetime(2026, 9, 28, 12, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-09-18T08:35:17+00:00", datetime(2026, 9, 18, 8, 35, 17, tzinfo=UTC)),
+        # From the first instant of 2000 to the day after the run, both included.
+        ("2000-01-01T00:00:00+00:00", datetime(2000, 1, 1, tzinfo=UTC)),
+        ((NOW + timedelta(days=1)).isoformat(), NOW + timedelta(days=1)),
+        ("1999-12-31T23:59:59+00:00", None),
+        ("1970-01-01T00:00:00+00:00", None),
+        ((NOW + timedelta(days=1, seconds=1)).isoformat(), None),
+        ("2026-09-18T08:35:17", None),
+        (None, None),
+    ],
+)
+def test_a_date_of_last_update_lies_between_2000_and_the_day_after_the_run(
+    value: object, expected: datetime | None
+) -> None:
+    assert update_date(value, NOW) == expected

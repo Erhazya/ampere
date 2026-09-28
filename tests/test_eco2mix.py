@@ -106,6 +106,8 @@ class FakeOdre:
         self.gaps: set[tuple[str, datetime]] = set()
         self.bodies: dict[str, bytes] = {}
         self.requests: list[str] = []
+        # When ODRÉ last updated each dataset; ten minutes before now unless a test says.
+        self.processed: dict[str, datetime] = {}
 
     def real_time_from(self) -> datetime:
         """Real time covers 90 days that end with tomorrow, past the consolidated data."""
@@ -194,6 +196,21 @@ class FakeOdre:
         random.Random(len(rows)).shuffle(rows)  # the exports come in no particular order
         return rows
 
+    def catalogue(self, request: httpx2.Request) -> dict[str, object]:
+        """The catalogue of ODRÉ, asked for the date each dataset was last updated."""
+        assert request.url.params["select"] == "dataset_id, data_processed"
+        names = re.findall(r'"([^"]+)"', request.url.params["where"])
+        results = [
+            {
+                "dataset_id": name,
+                "data_processed": self.processed.get(name, self.now - timedelta(minutes=10))
+                .astimezone(UTC)
+                .isoformat(),
+            }
+            for name in names
+        ]
+        return {"total_count": len(results), "results": results}
+
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         url = str(request.url)
         self.requests.append(url)
@@ -201,6 +218,8 @@ class FakeOdre:
             return httpx2.Response(
                 200, content=self.bodies[url], headers={"content-type": "application/json"}
             )
+        if request.url.path.endswith("/catalog/datasets"):
+            return httpx2.Response(200, json=self.catalogue(request))
         match = re.fullmatch(
             r".*/datasets/eco2mix-(national|regional)-(tr|cons-def)/(.*)", request.url.path
         )
@@ -278,9 +297,12 @@ def on(frame: pl.DataFrame, area: str, measure: str, day: date) -> pl.DataFrame:
 
 
 def asked(odre: FakeOdre) -> list[str]:
-    """The requests, named "periods national-tr" or by dataset and month, "national-tr 2026-06"."""
+    """The requests, named "periods national-tr" or by dataset and month, "national-tr 2026-06";
+    the request to the catalogue is left out."""
     names = []
     for request in map(httpx2.URL, odre.requests):
+        if request.path.endswith("/catalog/datasets"):
+            continue
         found = re.search(r"eco2mix-((?:national|regional)-(?:tr|cons-def))/(\w+)", request.path)
         assert found is not None
         if found.group(2) == "records":
@@ -414,8 +436,9 @@ def test_a_later_run_asks_only_for_the_months_that_can_still_change(
         "periods regional-tr",
         "regional-tr 2026-06",
     ]
-    # June and the periods of real time have changed: one new response each, per zone.
-    assert len(sorted(store.root.rglob("*.gz"))) == len(files) + 4
+    # June and the periods of real time have changed, one new response each per zone, and so
+    # have the dates of the catalogue.
+    assert len(sorted(store.root.rglob("*.gz"))) == len(files) + 5
 
 
 @pytest.mark.parametrize(
@@ -652,13 +675,13 @@ def test_full_asks_for_every_month_again(odre: FakeOdre, store: RawStore, clean:
     run(odre, store, clean)
     odre.requests.clear()
     run(odre, store, clean, now=LATER, full=True)
-    assert len(odre.requests) == 10
+    assert len(odre.requests) == 11
 
 
 def test_the_requests_are_spaced_out(odre: FakeOdre, store: RawStore, clean: Path) -> None:
     pauses: list[float] = []
     run(odre, store, clean, pauses=pauses)
-    assert pauses == [0.5] * 9
+    assert pauses == [0.5] * 10
 
 
 def test_on_the_last_day_of_a_month_the_forecast_of_tomorrow_is_fetched(
@@ -769,11 +792,11 @@ def test_each_new_response_and_the_whole_run_are_logged(
     caplog.set_level(logging.INFO, logger="ampere")
     run(odre, store, clean)
     kept = [record for record in caplog.records if "new response kept" in record.getMessage()]
-    assert len(kept) == 10
-    assert re.search(r"eco2mix: 10 requests, 10 new responses, \d+ values", caplog.text)
+    assert len(kept) == 11
+    assert re.search(r"eco2mix: 11 requests, 11 new responses, \d+ values", caplog.text)
     caplog.clear()
     run(odre, store, clean)
-    assert re.search(r"eco2mix: 6 requests, 0 new responses, \d+ values", caplog.text)
+    assert re.search(r"eco2mix: 7 requests, 0 new responses, \d+ values", caplog.text)
 
 
 def test_a_response_larger_than_the_limit_is_refused(
@@ -1151,3 +1174,146 @@ def test_a_raw_layer_problem_is_a_check_error(store: RawStore) -> None:
         now=datetime(2026, 10, 26, 11, tzinfo=PARIS),
     )
     assert report.errors == ["raw layer: eco2mix/stray.json.gz: not in the manifest"]
+
+
+def updates(clean: Path) -> dict[str, tuple[datetime, datetime]]:
+    """The date each dataset was last updated, and the reception of the response that says so."""
+    frame = pl.read_parquet(clean / "eco2mix" / "updates.parquet")
+    return {
+        row["dataset"]: (row["updated_at"], row["received_at"])
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def test_the_catalogue_gives_the_date_each_dataset_was_updated(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    odre.processed = {"eco2mix-national-tr": paris(2026, 6, 20, 14, 45)}
+    report = run(odre, store, clean)
+    assert not report.failed
+    kept = updates(clean)
+    assert sorted(kept) == [
+        "eco2mix-national-cons-def",
+        "eco2mix-national-tr",
+        "eco2mix-regional-cons-def",
+        "eco2mix-regional-tr",
+    ]
+    assert kept["eco2mix-national-tr"][0] == paris(2026, 6, 20, 14, 45)
+    assert kept["eco2mix-regional-tr"][0] == NOW - timedelta(minutes=10)
+    # One request for the four datasets, the last of the run, kept in the raw layer.
+    receipt = store.receipts("eco2mix")[-1]
+    assert (receipt.dataset, receipt.url) == ("updates", eco2mix.updates_url())
+    assert {received_at for _, received_at in kept.values()} == {receipt.received_at}
+
+
+def catalogue(**dates: object) -> bytes:
+    """A response of the catalogue, with these dates for the datasets they name."""
+    results = [
+        {"dataset_id": f"eco2mix-{key.replace('_', '-')}", "data_processed": value}
+        for key, value in dates.items()
+    ]
+    return json.dumps({"total_count": len(results), "results": results}).encode()
+
+
+EVERY: dict[str, object] = {
+    name: "2026-06-20T12:50:00+00:00"
+    for name in ("national_tr", "national_cons_def", "regional_tr", "regional_cons_def")
+}
+# The second run of these tests, an hour after the first.
+SECOND = NOW + timedelta(hours=1)
+FUTURE = (SECOND + timedelta(days=1, seconds=1)).astimezone(UTC).isoformat()
+A_LIST = json.dumps(
+    {"results": [{"dataset_id": ["eco2mix-national-tr"], "data_processed": EVERY["national_tr"]}]}
+).encode()
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (b"[]", "no results"),
+        (b"{}", "no results"),
+        (catalogue(national_tr=EVERY["national_tr"]), "no date for eco2mix-national-cons-def"),
+        (A_LIST, "no date for eco2mix-national-cons-def"),
+        (
+            catalogue(**{**EVERY, "regional_tr": "yesterday"}),
+            "unexpected data_processed 'yesterday'",
+        ),
+        (catalogue(**{**EVERY, "regional_tr": "2026-06-20T12:50:00"}), "unexpected data_processed"),
+        (catalogue(**{**EVERY, "regional_tr": None}), "unexpected data_processed None"),
+        # A date after the day following the run is faulty metadata, as Enedis's publications
+        # (ADR 026), and so is one before 2000, such as the start of the Unix epoch.
+        (catalogue(**{**EVERY, "national_tr": FUTURE}), f"unexpected data_processed '{FUTURE}'"),
+        (
+            catalogue(**{**EVERY, "national_tr": "1970-01-01T00:00:00+00:00"}),
+            "unexpected data_processed '1970-01-01T00:00:00+00:00'",
+        ),
+    ],
+    ids=[
+        "a list",
+        "no results",
+        "a dataset missing",
+        "an id that is a list",
+        "no date",
+        "no offset",
+        "null",
+        "the future",
+        "before 2000",
+    ],
+)
+def test_a_faulty_catalogue_is_an_error_and_the_dates_kept_stay(
+    odre: FakeOdre, store: RawStore, clean: Path, body: bytes, message: str
+) -> None:
+    run(odre, store, clean)
+    before = updates(clean)
+    odre.bodies[eco2mix.updates_url()] = body
+    report = run(odre, store, clean, now=SECOND)
+    assert [error for error in report.errors if message in error], report.errors
+    assert updates(clean) == before
+    # The measures are rebuilt all the same: this quarter-hour was measured after the first run.
+    assert not report.invalid
+    moment = (NOW - timedelta(minutes=45)).astimezone(UTC)
+    assert at(measures(clean), "FR", "co2_g_per_kwh", moment)["value"]
+
+
+def test_a_date_up_to_the_day_after_the_run_is_accepted(
+    odre: FakeOdre, store: RawStore, clean: Path
+) -> None:
+    odre.processed = {"eco2mix-national-tr": NOW + timedelta(days=1)}
+    assert not run(odre, store, clean).failed
+    assert updates(clean)["eco2mix-national-tr"][0] == NOW + timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "message"),
+    [(404, "application/json", "404"), (200, "text/html", "text/html")],
+    ids=["an error", "a page of maintenance"],
+)
+@pytest.mark.parametrize("first", [True, False], ids=["first run", "later run"])
+def test_a_catalogue_that_fails_is_an_error_and_the_measures_are_written(
+    odre: FakeOdre,
+    store: RawStore,
+    clean: Path,
+    status: int,
+    content_type: str,
+    message: str,
+    first: bool,
+) -> None:
+    if not first:
+        run(odre, store, clean)
+    before = updates(clean) if not first else None
+
+    def failing(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith("/catalog/datasets"):
+            return httpx2.Response(status, text="<html>", headers={"content-type": content_type})
+        return odre.handle(request)
+
+    odre.now = SECOND
+    with client(httpx2.MockTransport(failing)) as http:
+        report = ingest(http, store, clean, now=SECOND, since=SINCE, sleep=lambda seconds: None)
+    assert len(report.errors) == 1 and message in report.errors[0]
+    moment = (NOW - timedelta(minutes=45)).astimezone(UTC)
+    assert at(measures(clean), "FR", "co2_g_per_kwh", moment)["value"]
+    if first:
+        assert not (clean / "eco2mix" / "updates.parquet").exists()
+    else:
+        assert updates(clean) == before

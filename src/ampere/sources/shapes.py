@@ -3,7 +3,7 @@
 import io
 import json
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypeGuard
 
 import polars as pl
@@ -11,6 +11,10 @@ import polars as pl
 
 class SchemaError(ValueError):
     """A response that no longer has the shape the code expects."""
+
+
+# A date of last update before 2000, such as the start of the Unix epoch, is faulty metadata.
+EARLIEST_UPDATE = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def utc_instant(value: object) -> datetime | None:
@@ -24,6 +28,16 @@ def utc_instant(value: object) -> datetime | None:
         except (ValueError, OverflowError):
             pass
     return None
+
+
+def update_date(value: object, now: datetime) -> datetime | None:
+    """A date of last update that a source publishes, in UTC; None when it is faulty: no instant
+    with its offset, before 2000, or later than the day after the run, as with the publications
+    of Enedis (ADR 026)."""
+    moment = utc_instant(value)
+    if moment is None or not EARLIEST_UPDATE <= moment <= now + timedelta(days=1):
+        return None
+    return moment
 
 
 def load_json(content: bytes, url: str) -> Any:

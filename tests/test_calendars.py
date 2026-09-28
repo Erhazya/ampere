@@ -17,8 +17,11 @@ from ampere.data.days import day_bounds
 from ampere.data.http import client
 from ampere.data.raw import RawStore
 from ampere.sources.calendars import (
+    HOLIDAYS_RESOURCE,
+    HOLIDAYS_UPDATES_URL,
     HOLIDAYS_URL,
     SCHEMA,
+    SCHOOL_UPDATES_URL,
     SCHOOL_URL,
     Period,
     check,
@@ -142,11 +145,37 @@ class FakeCalendars:
         self.now = NOW
         self.holidays = holidays_json()
         self.school = school_export(school_rows())
+        # The dates each source publishes for its last update, as they stood on 28 September 2026.
+        self.school_updated: object = "2026-09-18T08:35:17.505000+00:00"
+        self.holidays_updated: object = "2026-01-02T14:32:45+00:00"
+        self.bodies: dict[str, bytes] = {}
         self.requests: list[str] = []
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         url = str(request.url)
         self.requests.append(url)
+        if url in self.bodies:
+            return httpx2.Response(
+                200, content=self.bodies[url], headers={"content-type": "application/json"}
+            )
+        if url == SCHOOL_UPDATES_URL:
+            row = {"dataset_id": "fr-en-calendrier-scolaire", "data_processed": self.school_updated}
+            return httpx2.Response(200, json={"total_count": 1, "results": [row]})
+        if url == HOLIDAYS_UPDATES_URL:
+            resources = [
+                {"url": HOLIDAYS_RESOURCE, "last_modified": self.holidays_updated},
+                # The page of the API, dated at each of its deployments.
+                {
+                    "url": "https://calendrier.api.gouv.fr/jours-feries/",
+                    "last_modified": "2026-09-27T18:33:16+00:00",
+                },
+            ]
+            page = {
+                "title": "Jours fériés en France",
+                "metrics": {"views": 699_036 + len(self.requests)},
+                "resources": resources,
+            }
+            return httpx2.Response(200, json=page)
         if url == HOLIDAYS_URL:
             return httpx2.Response(
                 200, content=self.holidays, headers={"content-type": "application/json"}
@@ -202,12 +231,14 @@ def test_each_run_asks_for_both_calendars_whole(
 ) -> None:
     pauses: list[float] = []
     assert run(fake, store, clean, pauses=pauses) == Report()
-    assert fake.requests == [HOLIDAYS_URL, SCHOOL_URL]
-    assert pauses == [0.5]
+    assert fake.requests == [HOLIDAYS_URL, SCHOOL_URL, SCHOOL_UPDATES_URL, HOLIDAYS_UPDATES_URL]
+    assert pauses == [0.5] * 3
     receipts = store.receipts("calendars")
     assert [(r.dataset, r.request) for r in receipts] == [
         ("public-holidays", "metropole"),
         ("school-holidays", "fr-en-calendrier-scolaire"),
+        ("updates", "school-holidays"),
+        ("updates", "public-holidays"),
     ]
     assert receipts[0].path.endswith(".json.gz")
     assert receipts[1].path.endswith(".parquet.gz")
@@ -219,8 +250,8 @@ def test_the_same_calendars_add_nothing_to_the_raw_layer(
     run(fake, store, clean)
     fake.requests.clear()
     assert run(fake, store, clean, now=NOW + timedelta(days=1)) == Report()
-    assert len(fake.requests) == 2
-    assert len(store.receipts("calendars")) == 2
+    assert len(fake.requests) == 4
+    assert len(store.receipts("calendars")) == 4
 
 
 def test_the_days_hold_the_holidays_of_the_pupils_of_lyon(
@@ -418,8 +449,134 @@ def test_the_run_is_logged(
 ) -> None:
     caplog.set_level(logging.INFO)
     run(fake, store, clean)
-    assert caplog.text.count("new response kept in") == 2
-    assert "calendars: 2 requests, 2 new responses" in caplog.text
+    assert caplog.text.count("new response kept in") == 4
+    assert "calendars: 4 requests, 4 new responses" in caplog.text
+
+
+def updates(clean: Path) -> dict[str, tuple[datetime, datetime]]:
+    """The date each calendar was last updated, and the reception of the response that says so."""
+    frame = pl.read_parquet(clean / "calendars" / "updates.parquet")
+    return {
+        row["dataset"]: (row["updated_at"], row["received_at"])
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def test_each_calendar_keeps_the_date_its_source_published(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    assert run(fake, store, clean) == Report()
+    assert updates(clean) == {
+        # The file of metropolitan France, not the page of the API that Ampère reads.
+        "public-holidays": (datetime(2026, 1, 2, 14, 32, 45, tzinfo=UTC), NOW),
+        "school-holidays": (datetime(2026, 9, 18, 8, 35, 17, 505000, tzinfo=UTC), NOW),
+    }
+
+
+def test_a_page_whose_visits_alone_change_adds_nothing_to_the_raw_layer(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    def pages() -> int:
+        return sum(
+            r.dataset == "updates" and r.request == "public-holidays"
+            for r in store.receipts("calendars")
+        )
+
+    run(fake, store, clean)
+    run(fake, store, clean, now=NOW + timedelta(days=1))
+    assert pages() == 1
+    # Its date keeps the reception of the first page that gave it.
+    assert updates(clean)["public-holidays"][1] == NOW
+    fake.holidays_updated = "2027-01-03T09:00:00+00:00"
+    run(fake, store, clean, now=datetime(2027, 1, 4, tzinfo=UTC))
+    assert pages() == 2
+
+
+LATER = NOW + timedelta(hours=1)
+FUTURE = (LATER + timedelta(days=1, seconds=1)).isoformat()
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("last week", "unexpected last_modified 'last week'"),
+        ("2026-01-02T14:32:45", "unexpected last_modified '2026-01-02T14:32:45'"),
+        (None, "unexpected last_modified None"),
+        # A date after the day following the run is faulty metadata, as Enedis's publications
+        # (ADR 026), and so is one before 2000, such as the start of the Unix epoch.
+        (FUTURE, f"unexpected last_modified '{FUTURE}'"),
+        ("1970-01-01T00:00:00+00:00", "unexpected last_modified '1970-01-01T00:00:00+00:00'"),
+    ],
+    ids=["words", "no offset", "null", "the future", "before 2000"],
+)
+def test_a_faulty_date_is_an_error_and_the_date_kept_stays(
+    fake: FakeCalendars, store: RawStore, clean: Path, value: object, message: str
+) -> None:
+    run(fake, store, clean)
+    before = updates(clean)
+    (clean / "calendars" / "days.parquet").unlink()
+    fake.holidays_updated = value
+    fake.school_updated = "2026-09-25T10:00:00+00:00"
+    report = run(fake, store, clean, now=LATER)
+    assert [error.split(": ", 1)[1] for error in report.errors] == [message]
+    kept = updates(clean)
+    assert kept["public-holidays"] == before["public-holidays"]
+    # The other date goes on, and the days are written again.
+    assert kept["school-holidays"] == (datetime(2026, 9, 25, 10, tzinfo=UTC), LATER)
+    assert days(clean).height > 0
+
+
+def test_a_date_up_to_the_day_after_the_run_is_accepted(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    fake.holidays_updated = (NOW + timedelta(days=1)).isoformat()
+    assert run(fake, store, clean) == Report()
+    assert updates(clean)["public-holidays"][0] == NOW + timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    ("url", "body", "message"),
+    [
+        (HOLIDAYS_UPDATES_URL, b'{"resources": []}', f"no resource {HOLIDAYS_RESOURCE}"),
+        (HOLIDAYS_UPDATES_URL, b"[]", f"no resource {HOLIDAYS_RESOURCE}"),
+        (SCHOOL_UPDATES_URL, b'{"results": []}', "no date for fr-en-calendrier-scolaire"),
+        (SCHOOL_UPDATES_URL, b"not json", "not JSON"),
+    ],
+    ids=["no resource", "a list", "no result", "not JSON"],
+)
+def test_a_date_response_of_another_shape_is_an_error(
+    fake: FakeCalendars, store: RawStore, clean: Path, url: str, body: bytes, message: str
+) -> None:
+    fake.bodies[url] = body
+    report = run(fake, store, clean)
+    assert len(report.errors) == 1 and message in report.errors[0]
+    assert len(updates(clean)) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "message"),
+    [(404, "application/json", "404"), (200, "text/html", "text/html")],
+    ids=["an error", "a page of maintenance"],
+)
+def test_a_date_request_that_fails_is_an_error_and_the_days_are_written(
+    fake: FakeCalendars,
+    store: RawStore,
+    clean: Path,
+    status: int,
+    content_type: str,
+    message: str,
+) -> None:
+    def failing(request: httpx2.Request) -> httpx2.Response:
+        if str(request.url) == HOLIDAYS_UPDATES_URL:
+            return httpx2.Response(status, text="<html>", headers={"content-type": content_type})
+        return fake.handle(request)
+
+    with client(httpx2.MockTransport(failing)) as http:
+        report = ingest(http, store, clean, now=NOW, since=SINCE, sleep=lambda seconds: None)
+    assert len(report.errors) == 1 and message in report.errors[0]
+    assert days(clean).height > 0
+    # The school calendar gave its date: only the public holidays lack theirs.
+    assert list(updates(clean)) == ["school-holidays"]
 
 
 URL = "https://example.test/calendar"

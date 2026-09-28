@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 import httpx2
 import polars as pl
 
-from ampere.data.clean import Report, instants_per_day, write_parquet
+from ampere.data.clean import Report, instants_per_day, write_parquet, write_updates
 from ampere.data.days import (
     PARIS,
     QUARTER_HOUR,
@@ -32,14 +32,19 @@ from ampere.data.days import (
     paris_months,
     quarter_hours,
 )
+from ampere.data.http import REQUEST_FAILURES
 from ampere.data.raw import DamagedRawFile, RawStore
 from ampere.sources.archive import PAUSE, SINCE, fetch_json
-from ampere.sources.shapes import SchemaError, is_number, load_json, utc_instant
+from ampere.sources.shapes import SchemaError, is_number, load_json, update_date, utc_instant
 
 log = logging.getLogger(__name__)
 
 SOURCE = "eco2mix"
 API = "https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets"
+# The catalogue gives the date ODRÉ last updated each dataset, which the Licence Ouverte asks to
+# cite with the data (ADR 029): one small response for the four datasets.
+UPDATES = "updates"
+UPDATES_MAX_BYTES = 100_000
 # A month can change until this long after its end, like a week of SMARD (ADR 023).
 SETTLED_AFTER = timedelta(days=14)
 # The largest response accepted: a month of national data weighs 2.6 MB.
@@ -176,6 +181,41 @@ def month_url(area: Area, kind: str, start: datetime, end: datetime) -> str:
     return f"{API}/eco2mix-{dataset(area, kind)}/exports/json?{urlencode({'where': where})}"
 
 
+def updates_url() -> str:
+    """The query of the catalogue for the date ODRÉ last updated each dataset."""
+    names = ", ".join(f'"{name}"' for name in odre_datasets())
+    query = {"select": "dataset_id, data_processed", "where": f"dataset_id in ({names})"}
+    return f"{API}?{urlencode(query)}"
+
+
+def odre_datasets() -> list[str]:
+    """The names of the four datasets on ODRÉ."""
+    return [f"eco2mix-{dataset(area, kind)}" for area in AREAS for kind in (TR, CONS_DEF)]
+
+
+def parse_updates(content: bytes, url: str, now: datetime) -> dict[str, datetime]:
+    """The date ODRÉ last updated each dataset, from its catalogue."""
+    body = load_json(content, url)
+    results = body.get("results") if isinstance(body, dict) else None
+    if not isinstance(results, list):
+        raise SchemaError(f"{url}: no results")
+    wanted = set(odre_datasets())
+    dates: dict[str, datetime] = {}
+    for row in results:
+        name = row.get("dataset_id") if isinstance(row, dict) else None
+        if not isinstance(name, str) or name not in wanted:
+            continue
+        value = row.get("data_processed")
+        moment = update_date(value, now)
+        if moment is None:
+            raise SchemaError(f"{url}: unexpected data_processed {value!r} for {name}")
+        dates[name] = moment
+    missing = sorted(wanted - dates.keys())
+    if missing:
+        raise SchemaError(f"{url}: no date for {', '.join(missing)}")
+    return dates
+
+
 def best_version(
     periods: dict[str, tuple[datetime, datetime]], start: datetime, end: datetime
 ) -> str:
@@ -212,13 +252,13 @@ def ingest(
     warnings: list[str] = []
     asked = 0
 
-    def ask(name: str, url: str) -> tuple[bytes, datetime]:
+    def ask(name: str, url: str, max_bytes: int = MAX_BYTES) -> tuple[bytes, datetime]:
         nonlocal asked
         if asked:
             sleep(PAUSE)
         asked += 1
         content, receipt = fetch_json(
-            http, store, source=SOURCE, dataset=name, url=url, max_bytes=MAX_BYTES, sleep=sleep
+            http, store, source=SOURCE, dataset=name, url=url, max_bytes=max_bytes, sleep=sleep
         )
         return content, receipt.received_at
 
@@ -270,12 +310,6 @@ def ingest(
             if held is not None:
                 plan.append((file, *held))
     measures = build(plan)
-    log.info(
-        "eco2mix: %d requests, %d new responses, %d values",
-        asked,
-        len(store.receipts(SOURCE)) - kept,
-        measures.height,
-    )
     report = check(measures, store, since=since, now=now)
     report.errors[:0] = errors
     report.warnings[:0] = warnings
@@ -284,6 +318,27 @@ def ingest(
         log.error("%s kept as it was: the new values break its rules", path)
     else:
         write_parquet(measures, path)
+    # The dates of last update come once the measures are written: they are cited with the data,
+    # never needed to build them. A request that fails, or a faulty answer, is an error of the
+    # report, and the dates kept from an earlier run stay.
+    url = updates_url()
+    try:
+        content, received_at = ask(UPDATES, url, UPDATES_MAX_BYTES)
+        dates = parse_updates(content, url, now)
+    except (SchemaError, *REQUEST_FAILURES) as error:
+        report.errors.append(str(error))
+    else:
+        write_updates(
+            {name: (moment, received_at) for name, moment in dates.items()},
+            clean / SOURCE / "updates.parquet",
+            known=odre_datasets(),
+        )
+    log.info(
+        "eco2mix: %d requests, %d new responses, %d values",
+        asked,
+        len(store.receipts(SOURCE)) - kept,
+        measures.height,
+    )
     return report
 
 
