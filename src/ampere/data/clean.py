@@ -5,14 +5,28 @@ when its rows are valid.
 """
 
 import io
-from collections.abc import Sequence
+import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
 from ampere.data.days import PARIS
 from ampere.data.raw import write_atomically
+
+log = logging.getLogger(__name__)
+
+# The date each dataset was last updated, as its source publishes it, and the reception of the
+# response that says so: the Licence Ouverte asks to cite that date with the data (ADR 029).
+UPDATES = pl.Schema(
+    {
+        "dataset": pl.String(),
+        "updated_at": pl.Datetime("us", "UTC"),
+        "received_at": pl.Datetime("us", "UTC"),
+    }
+)
 
 
 @dataclass
@@ -38,6 +52,24 @@ def write_parquet(frame: pl.DataFrame, path: Path) -> None:
     buffer = io.BytesIO()
     frame.write_parquet(buffer)
     write_atomically(path, buffer.getvalue())
+
+
+def write_updates(dates: Mapping[str, tuple[datetime, datetime]], path: Path) -> None:
+    """Record, for each dataset, the date its source last updated it and the reception of the
+    response that says so. The other datasets of the file keep their row: a source may give some
+    dates and fail to give others."""
+    rows = {}
+    if path.exists():
+        try:
+            kept = pl.read_parquet(path)
+            rows = {row[0]: (row[1], row[2]) for row in kept.select(UPDATES.names()).rows()}
+        except (OSError, pl.exceptions.PolarsError) as error:
+            log.warning("%s does not read (%s): it is written again", path, error)
+    rows.update(dates)
+    frame = pl.DataFrame(
+        [(name, *moments) for name, moments in sorted(rows.items())], schema=UPDATES, orient="row"
+    )
+    write_parquet(frame, path)
 
 
 def instants_per_day(

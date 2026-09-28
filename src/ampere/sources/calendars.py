@@ -14,15 +14,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx2
 import polars as pl
 
-from ampere.data.clean import Report, write_parquet
+from ampere.data.clean import Report, write_parquet, write_updates
 from ampere.data.days import day_bounds, every_day, paris_day
 from ampere.data.raw import DamagedRawFile, RawStore, Receipt
 from ampere.sources.archive import JSON, PAUSE, SINCE, fetch
-from ampere.sources.shapes import SchemaError, load_json, read_parquet
+from ampere.sources.shapes import SchemaError, load_json, read_parquet, utc_instant
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,18 @@ SCHOOL_URL = (
 )
 PARQUET = "application/parquet"
 MAX_BYTES = 1_000_000
+# The date each calendar was last updated, which the Licence Ouverte asks to cite with the data
+# (ADR 029): the catalogue of data.education.gouv.fr for the school calendar, and data.gouv.fr
+# for the resource of Etalab that Ampère reads.
+UPDATES = "updates"
+SCHOOL_DATASET = "fr-en-calendrier-scolaire"
+SCHOOL_UPDATES_URL = (
+    "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets?"
+    + urlencode({"select": "dataset_id, data_processed", "where": f'dataset_id="{SCHOOL_DATASET}"'})
+)
+HOLIDAYS_UPDATES_URL = "https://www.data.gouv.fr/api/1/datasets/jours-feries-en-france/"
+HOLIDAYS_RESOURCE = "https://calendrier.api.gouv.fr/jours-feries/"
+UPDATES_MAX_BYTES = 200_000
 # The school calendar of all of France has 2,587 rows in 7 columns: Parquet compresses by itself,
 # and a few kilobytes could unfold into millions of rows.
 MAX_ROWS = 10_000
@@ -112,7 +125,32 @@ def ingest(
 
     ask(HOLIDAYS, "metropole", HOLIDAYS_URL, JSON, "json")
     sleep(PAUSE)
-    ask(SCHOOL, "fr-en-calendrier-scolaire", SCHOOL_URL, PARQUET, "parquet")
+    ask(SCHOOL, SCHOOL_DATASET, SCHOOL_URL, PARQUET, "parquet")
+    dates: dict[str, tuple[datetime, datetime]] = {}
+    for name, url, parse in (
+        (SCHOOL, SCHOOL_UPDATES_URL, parse_school_update),
+        (HOLIDAYS, HOLIDAYS_UPDATES_URL, parse_holidays_update),
+    ):
+        sleep(PAUSE)
+        content, receipt = fetch(
+            http,
+            store,
+            source=SOURCE,
+            dataset=UPDATES,
+            url=url,
+            content_type=JSON,
+            extension="json",
+            max_bytes=UPDATES_MAX_BYTES,
+            sleep=sleep,
+            request=name,
+        )
+        try:
+            dates[name] = (parse(content, url, now), receipt.received_at)
+        except SchemaError as error:
+            # The date kept from an earlier run stays; the days do not depend on it.
+            report.errors.append(str(error))
+    if dates:
+        write_updates(dates, clean / SOURCE / "updates.parquet")
     holidays = last_readable(store, HOLIDAYS, parse_holidays, report)
     school = last_readable(store, SCHOOL, parse_school, report)
     if holidays is not None and school is not None:
@@ -122,8 +160,45 @@ def ingest(
         report.warnings.extend(found.warnings)
         write_parquet(frame, clean / SOURCE / "days.parquet")
     report.errors.extend(f"raw layer: {problem}" for problem in store.verify(SOURCE))
-    log.info("%s: 2 requests, %d new responses", SOURCE, len(store.receipts(SOURCE)) - kept)
+    log.info("%s: 4 requests, %d new responses", SOURCE, len(store.receipts(SOURCE)) - kept)
     return report
+
+
+def parse_school_update(content: bytes, url: str, now: datetime) -> datetime:
+    """The date data.education.gouv.fr last updated the school calendar, from its catalogue."""
+    body = load_json(content, url)
+    results = body.get("results") if isinstance(body, dict) else None
+    rows = [
+        row
+        for row in (results if isinstance(results, list) else [])
+        if isinstance(row, dict) and row.get("dataset_id") == SCHOOL_DATASET
+    ]
+    if len(rows) != 1:
+        raise SchemaError(f"{url}: no date for {SCHOOL_DATASET}")
+    return published(rows[0].get("data_processed"), url, "data_processed", now)
+
+
+def parse_holidays_update(content: bytes, url: str, now: datetime) -> datetime:
+    """The date data.gouv.fr gives for the resource of Etalab that Ampère reads."""
+    body = load_json(content, url)
+    resources = body.get("resources") if isinstance(body, dict) else None
+    rows = [
+        row
+        for row in (resources if isinstance(resources, list) else [])
+        if isinstance(row, dict) and row.get("url") == HOLIDAYS_RESOURCE
+    ]
+    if len(rows) != 1:
+        raise SchemaError(f"{url}: no resource {HOLIDAYS_RESOURCE}")
+    return published(rows[0].get("last_modified"), url, "last_modified", now)
+
+
+def published(value: object, url: str, name: str, now: datetime) -> datetime:
+    """A date of last update, in UTC. One later than the day after the run is faulty metadata, as
+    with the publications of Enedis (ADR 026)."""
+    moment = utc_instant(value)
+    if moment is None or moment > now + timedelta(days=1):
+        raise SchemaError(f"{url}: unexpected {name} {value!r}")
+    return moment
 
 
 def last_readable[T](

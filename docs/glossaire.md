@@ -2,7 +2,7 @@
 
 Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque étape et sert aussi à préparer les entretiens.
 
-> Dernière mise à jour : 28 septembre 2026 (étape 2, ADR 028).
+> Dernière mise à jour : 28 septembre 2026 (étape 2, ADR 029).
 
 ## Énergie et marché de l'électricité
 
@@ -148,7 +148,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Jumeau numérique** : modèle informatique d'un système réel, soumis aux mêmes conditions que lui, qui permet de tester des décisions sans toucher au monde réel.
 
-**Licence Ouverte (Etalab 2.0)** : licence de l'État français pour les données publiques. Elle donne les mêmes libertés que CC BY 4.0, à condition de citer la source et la date de dernière mise à jour.
+**Licence Ouverte (Etalab 2.0)** : licence de l'État français pour les données publiques. Elle donne les mêmes libertés que CC BY 4.0, à condition de citer la source et la date de dernière mise à jour. Cette date est celle que publie la source, pas celle où Ampère a reçu les données : les catalogues d'ODRÉ et de data.education.gouv.fr la donnent dans le champ `data_processed` de chaque jeu, et data.gouv.fr dans le `last_modified` de chaque ressource (ADR 029).
 
 **LTTB (*Largest-Triangle-Three-Buckets*)** : méthode de sous-échantillonnage qui réduit une longue série à quelques centaines de points en gardant sa forme visuelle, pics et creux compris. Elle rend les graphiques rapides sans les déformer.
 

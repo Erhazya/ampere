@@ -17,8 +17,11 @@ from ampere.data.days import day_bounds
 from ampere.data.http import client
 from ampere.data.raw import RawStore
 from ampere.sources.calendars import (
+    HOLIDAYS_RESOURCE,
+    HOLIDAYS_UPDATES_URL,
     HOLIDAYS_URL,
     SCHEMA,
+    SCHOOL_UPDATES_URL,
     SCHOOL_URL,
     Period,
     check,
@@ -142,11 +145,33 @@ class FakeCalendars:
         self.now = NOW
         self.holidays = holidays_json()
         self.school = school_export(school_rows())
+        # The dates each source publishes for its last update, as they stood on 28 September 2026.
+        self.school_updated: object = "2026-09-18T08:35:17.505000+00:00"
+        self.holidays_updated: object = "2026-09-27T18:33:16+00:00"
+        self.bodies: dict[str, bytes] = {}
         self.requests: list[str] = []
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         url = str(request.url)
         self.requests.append(url)
+        if url in self.bodies:
+            return httpx2.Response(
+                200, content=self.bodies[url], headers={"content-type": "application/json"}
+            )
+        if url == SCHOOL_UPDATES_URL:
+            row = {"dataset_id": "fr-en-calendrier-scolaire", "data_processed": self.school_updated}
+            return httpx2.Response(200, json={"total_count": 1, "results": [row]})
+        if url == HOLIDAYS_UPDATES_URL:
+            resources = [
+                {
+                    "url": "https://etalab.github.io/jours-feries-france-data/csv/jours_feries_metropole.csv",
+                    "last_modified": "2026-01-02T14:32:45+00:00",
+                },
+                {"url": HOLIDAYS_RESOURCE, "last_modified": self.holidays_updated},
+            ]
+            return httpx2.Response(
+                200, json={"title": "Jours fériés en France", "resources": resources}
+            )
         if url == HOLIDAYS_URL:
             return httpx2.Response(
                 200, content=self.holidays, headers={"content-type": "application/json"}
@@ -202,12 +227,14 @@ def test_each_run_asks_for_both_calendars_whole(
 ) -> None:
     pauses: list[float] = []
     assert run(fake, store, clean, pauses=pauses) == Report()
-    assert fake.requests == [HOLIDAYS_URL, SCHOOL_URL]
-    assert pauses == [0.5]
+    assert fake.requests == [HOLIDAYS_URL, SCHOOL_URL, SCHOOL_UPDATES_URL, HOLIDAYS_UPDATES_URL]
+    assert pauses == [0.5] * 3
     receipts = store.receipts("calendars")
     assert [(r.dataset, r.request) for r in receipts] == [
         ("public-holidays", "metropole"),
         ("school-holidays", "fr-en-calendrier-scolaire"),
+        ("updates", "school-holidays"),
+        ("updates", "public-holidays"),
     ]
     assert receipts[0].path.endswith(".json.gz")
     assert receipts[1].path.endswith(".parquet.gz")
@@ -219,8 +246,8 @@ def test_the_same_calendars_add_nothing_to_the_raw_layer(
     run(fake, store, clean)
     fake.requests.clear()
     assert run(fake, store, clean, now=NOW + timedelta(days=1)) == Report()
-    assert len(fake.requests) == 2
-    assert len(store.receipts("calendars")) == 2
+    assert len(fake.requests) == 4
+    assert len(store.receipts("calendars")) == 4
 
 
 def test_the_days_hold_the_holidays_of_the_pupils_of_lyon(
@@ -418,8 +445,72 @@ def test_the_run_is_logged(
 ) -> None:
     caplog.set_level(logging.INFO)
     run(fake, store, clean)
-    assert caplog.text.count("new response kept in") == 2
-    assert "calendars: 2 requests, 2 new responses" in caplog.text
+    assert caplog.text.count("new response kept in") == 4
+    assert "calendars: 4 requests, 4 new responses" in caplog.text
+
+
+def updates(clean: Path) -> dict[str, tuple[datetime, datetime]]:
+    """The date each calendar was last updated, and the reception of the response that says so."""
+    frame = pl.read_parquet(clean / "calendars" / "updates.parquet")
+    return {
+        row["dataset"]: (row["updated_at"], row["received_at"])
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def test_each_calendar_keeps_the_date_its_source_published(
+    fake: FakeCalendars, store: RawStore, clean: Path
+) -> None:
+    assert run(fake, store, clean) == Report()
+    assert updates(clean) == {
+        "public-holidays": (datetime(2026, 9, 27, 18, 33, 16, tzinfo=UTC), NOW),
+        "school-holidays": (datetime(2026, 9, 18, 8, 35, 17, 505000, tzinfo=UTC), NOW),
+    }
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("last week", "unexpected last_modified 'last week'"),
+        ("2026-09-27T18:33:16", "unexpected last_modified '2026-09-27T18:33:16'"),
+        (None, "unexpected last_modified None"),
+        # A date after the run is faulty metadata, as Enedis's publications (ADR 026).
+        ("2026-09-29T12:00:01+00:00", "unexpected last_modified '2026-09-29T12:00:01+00:00'"),
+    ],
+)
+def test_a_faulty_date_is_an_error_and_the_date_kept_stays(
+    fake: FakeCalendars, store: RawStore, clean: Path, value: object, message: str
+) -> None:
+    run(fake, store, clean)
+    before = updates(clean)
+    fake.holidays_updated = value
+    fake.school_updated = "2026-09-25T10:00:00+00:00"
+    later = NOW + timedelta(hours=1)
+    report = run(fake, store, clean, now=later)
+    assert [error.split(": ", 1)[1] for error in report.errors] == [message]
+    kept = updates(clean)
+    assert kept["public-holidays"] == before["public-holidays"]
+    # The other date goes on, and so do the days.
+    assert kept["school-holidays"] == (datetime(2026, 9, 25, 10, tzinfo=UTC), later)
+    assert days(clean).height > 0
+
+
+@pytest.mark.parametrize(
+    ("url", "body", "message"),
+    [
+        (HOLIDAYS_UPDATES_URL, b'{"resources": []}', f"no resource {HOLIDAYS_RESOURCE}"),
+        (HOLIDAYS_UPDATES_URL, b"[]", f"no resource {HOLIDAYS_RESOURCE}"),
+        (SCHOOL_UPDATES_URL, b'{"results": []}', "no date for fr-en-calendrier-scolaire"),
+        (SCHOOL_UPDATES_URL, b"not json", "not JSON"),
+    ],
+)
+def test_a_date_response_of_another_shape_is_an_error(
+    fake: FakeCalendars, store: RawStore, clean: Path, url: str, body: bytes, message: str
+) -> None:
+    fake.bodies[url] = body
+    report = run(fake, store, clean)
+    assert len(report.errors) == 1 and message in report.errors[0]
+    assert len(updates(clean)) == 1
 
 
 URL = "https://example.test/calendar"
