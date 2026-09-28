@@ -138,6 +138,8 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 
 **Fichiers statiques** : fichiers envoyés tels quels au navigateur, sans calcul côté serveur : le HTML, le JavaScript, les styles, les polices. `npm run build` produit ceux du tableau de bord dans `web/dist/`, et en ligne l'API les sert (ADR 018).
 
+**Frontière d'erreur** (*error boundary*) : composant React qui remplace par un message la partie de la page où une erreur a été levée ; sans elle, React retire toute la page. L'écran « Data » en a une autour des graphiques, pour garder la vue en tableau, et l'application une autour de chaque écran, pour garder la barre du haut (ADR 029).
+
 **GHCR** (*GitHub Container Registry*) : le registre d'images Docker de GitHub. La CI y publie l'image de la démo à chaque push vers `main` (ADR 020).
 
 **glibc, musl** : deux bibliothèques C de Linux, sur lesquelles reposent les programmes compilés. Debian utilise glibc, Alpine musl ; certains paquets Python précompilés n'existent que pour glibc (ADR 020).
@@ -191,5 +193,7 @@ Les notions du projet, expliquées simplement. Ce glossaire s'enrichit à chaque
 **Secret statistique** : règle qui interdit de publier un agrégat qui trahirait le comportement d'un foyer. Chez Enedis, une courbe moyenne de moins de 5 000 sites relevés n'est publiée à la demi-heure que la semaine ou le jour du pic du mois ; le reste du temps, elle vaut la moyenne de sa journée, recopiée sur 48 demi-heures. Sous 100 sites, elle est masquée. Le nettoyé d'Ampère marque ces valeurs d'un pas de 1 440 minutes (ADR 026).
 
 **Table longue** : une table qui a une ligne par mesure et par instant, avec une colonne qui nomme la mesure, plutôt qu'une colonne par mesure. Chaque ligne porte ainsi son propre pas de temps et sa propre version, et une mesure de plus ne change pas le schéma. Les nettoyés d'éCO2mix, d'Open-Meteo et d'Enedis sont rangés ainsi (ADR 024 à 026).
+
+**Test de contrat** : test qui vérifie que deux programmes s'entendent sur un même format. Un seul export d'exemple, `web/src/test/export-example.json`, doit passer le contrôle de l'API, en Python, et celui du tableau de bord, en TypeScript : une série ajoutée d'un côté sans l'autre fait échouer un test (ADR 029).
 
 **UTC** : temps universel, sans changement d'heure. Le projet stocke tous les instants en UTC et ne les convertit en heure de Paris qu'à l'affichage ; seuls les calendriers, qui décrivent des journées de Paris, ont une colonne de dates de Paris (ADR 027). Il évite ainsi les pièges des journées de 23 et de 25 heures.

@@ -135,6 +135,8 @@
 
 .holiday {
   top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--ink-soft);
 }
 

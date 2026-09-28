@@ -1,6 +1,6 @@
-import type { Recent, SeriesId } from '../api/recent';
+import type { Recent } from '../api/recent';
 import { momentLabel, number } from '../format';
-import { PANELS, pointAt } from '../panels';
+import { PANELS, pointAt, seriesOf } from '../panels';
 import { TEXT } from '../text';
 import styles from './DataTable.module.css';
 
@@ -8,11 +8,7 @@ const HOUR = 3_600_000;
 
 /** The columns of the table: each series, with the panel that gives its unit and decimals. */
 const COLUMNS = PANELS.flatMap((panel) =>
-  [panel.measured, ...(panel.forecast ? [panel.forecast] : [])].map((id: SeriesId) => ({
-    id,
-    panel,
-    unit: TEXT.data.panels[panel.id as keyof typeof TEXT.data.panels].unit,
-  })),
+  seriesOf(panel).map((id) => ({ id, panel, unit: TEXT.data.panels[panel.id].unit })),
 );
 
 /**
@@ -40,6 +36,11 @@ export function DataTable({ recent }: { recent: Recent }) {
           </tr>
         </thead>
         <tbody>
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={COLUMNS.length + 1}>{TEXT.data.noData}</td>
+            </tr>
+          )}
           {rows.map(({ instant, values }) => (
             <tr key={instant}>
               <th scope="row">{momentLabel.format(instant)}</th>

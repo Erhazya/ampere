@@ -13,7 +13,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 
 import ampere
 from ampere.api import create_app
-from ampere.recent import EXPORT, MAX_BYTES
+from ampere.recent import EXPORT, MAX_BYTES, SERIES, SOURCES, Recent
 
 HEALTH = {"status": "ok", "version": ampere.__version__}
 
@@ -319,3 +319,13 @@ def test_only_a_regular_file_of_the_data_folder_is_read(
     exported.parent.symlink_to(outside)
     assert client.get("/api/data/recent").status_code == 503
     assert "leads out of the data folder" in caplog.text
+
+
+def test_the_example_export_of_the_dashboard_is_one_the_api_serves() -> None:
+    """The dashboard checks the same file with its own rules (web/src/api/recent.test.ts): a
+    series or a source added to the shape must be added to the example, where the dashboard must
+    then accept it (ADR 029)."""
+    example = Path(__file__).parents[1] / "web" / "src" / "test" / "export-example.json"
+    recent = Recent.model_validate_json(example.read_bytes(), strict=True)
+    assert [series.id for series in recent.series] == list(SERIES)
+    assert [source.id for source in recent.sources] == list(SOURCES)

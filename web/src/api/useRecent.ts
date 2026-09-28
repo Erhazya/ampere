@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RECENT_TIMEOUT_MS } from './config';
 import { fetchRecent, type Recent, RecentError, type RecentFailure } from './recent';
 
@@ -18,13 +18,14 @@ function classify(error: unknown, timedOut: boolean): RecentFailure {
 }
 
 /**
- * Asks the API for the recent days once, when the screen shows. The export changes once a day,
- * after the daily job: a new visit asks again, and the browser downloads it only if it changed.
- * An answer slower than RECENT_TIMEOUT_MS counts as a failure; on unmount, the request is
- * cancelled and nothing more is reported.
+ * Asks the API for the recent days once, when the screen shows, and again when `retry` is called
+ * after a failure. The export changes once a day, after the daily job: a new visit asks again,
+ * and the browser downloads it only if it changed. An answer slower than RECENT_TIMEOUT_MS counts
+ * as a failure; on unmount, the request is cancelled and nothing more is reported.
  */
-export function useRecent(): RecentState {
+export function useRecent(): [RecentState, () => void] {
   const [recent, setRecent] = useState<RecentState>({ state: 'loading' });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let ignore = false;
@@ -39,7 +40,11 @@ export function useRecent(): RecentState {
         if (!ignore) setRecent({ state: 'ready', recent: data });
       })
       .catch((error: unknown) => {
-        if (!ignore) setRecent({ state: 'failed', failure: classify(error, timedOut) });
+        if (ignore) return;
+        const failure = classify(error, timedOut);
+        // Keep the error itself, with its cause and stack, in the browser's console.
+        if (failure.kind !== 'none') console.warn('The recent days did not load', error);
+        setRecent({ state: 'failed', failure });
       })
       .finally(() => {
         clearTimeout(timer);
@@ -49,7 +54,11 @@ export function useRecent(): RecentState {
       clearTimeout(timer);
       controller.abort();
     };
-  }, []);
+  }, [attempt]);
 
-  return recent;
+  const retry = useCallback(() => {
+    setRecent({ state: 'loading' });
+    setAttempt((count) => count + 1);
+  }, []);
+  return [recent, retry];
 }

@@ -61,7 +61,7 @@ function readColors(element: Element): Colors {
   };
 }
 
-/** "23:45" on the day of the export, "Sat 26, 23:45" on another one. */
+/** "23:45" on the day of the visit, "Sat 26, 23:45" on another one. */
 function stamp(instant: number, reference: number): string {
   const sameDay = dayLabel.format(instant) === dayLabel.format(reference);
   return sameDay
@@ -70,7 +70,7 @@ function stamp(instant: number, reference: number): string {
 }
 
 function words(panel: Panel) {
-  return TEXT.data.panels[panel.id as keyof typeof TEXT.data.panels];
+  return TEXT.data.panels[panel.id];
 }
 
 /** A value of a chart in the unit on screen, with that unit. */
@@ -79,9 +79,9 @@ function amount(panel: Panel, value: number): string {
 }
 
 /** The header of a chart: its latest value, and what its forecast gives for the time of the
- * export. */
-function headline(panel: Panel, recent: Recent): string {
-  const at = (instant: number) => `${TEXT.data.at} ${stamp(instant, recent.generatedAt)}`;
+ * export, dated from the day of the visit. */
+function headline(panel: Panel, recent: Recent, now: number): string {
+  const at = (instant: number) => `${TEXT.data.at} ${stamp(instant, now)}`;
   const parts: string[] = [];
   const last = latest(recent.series.get(panel.measured));
   if (last) parts.push(`${amount(panel, last[1])} ${at(last[0])}`);
@@ -101,7 +101,7 @@ function headline(panel: Panel, recent: Recent): string {
  * cursor and the card of values under it are HTML, so that screen readers read the text and no
  * text from a source goes through ECharts.
  */
-export function DataCharts({ recent }: { recent: Recent }) {
+export function DataCharts({ recent, now }: { recent: Recent; now: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const plotsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [cursor, setCursor] = useState<Cursor | null>(null);
@@ -111,15 +111,20 @@ export function DataCharts({ recent }: { recent: Recent }) {
       PANELS.map((panel) => ({
         panel,
         scale: extent(panel, recent),
-        headline: headline(panel, recent),
+        headline: headline(panel, recent, now),
       })),
-    [recent],
+    [recent, now],
   );
+  // One row for the school holidays and one for the public holidays: a public holiday often
+  // falls on the first or last day of school holidays, and their names would overlap.
   const holidays = useMemo(
-    () => [
-      ...bands(recent.days, (day) => day.schoolHolidays),
-      ...bands(recent.days, (day) => day.publicHoliday),
-    ],
+    () =>
+      (
+        [
+          ['school', bands(recent.days, (day) => day.schoolHolidays)],
+          ['public', bands(recent.days, (day) => day.publicHoliday)],
+        ] as const
+      ).filter(([, row]) => row.length > 0),
     [recent],
   );
 
@@ -127,14 +132,20 @@ export function DataCharts({ recent }: { recent: Recent }) {
     const root = containerRef.current;
     if (!root) return;
     const colors = readColors(root);
-    const now = Date.now();
-    const charts = PANELS.map((panel, index) => {
-      const element = plotsRef.current[index];
-      if (!element) throw new Error(`no element for the chart ${panel.id}`);
-      const chart = echarts.init(element, undefined, { renderer: 'canvas' });
-      chart.setOption(panelOption(panel, recent, now, colors));
-      return chart;
-    });
+    const charts: ReturnType<typeof echarts.init>[] = [];
+    try {
+      for (const [index, panel] of PANELS.entries()) {
+        const element = plotsRef.current[index];
+        if (!element) throw new Error(`no element for the chart ${panel.id}`);
+        const chart = echarts.init(element, undefined, { renderer: 'canvas' });
+        charts.push(chart);
+        chart.setOption(panelOption(panel, recent, now, colors));
+      }
+    } catch (error) {
+      // The charts drawn so far go too; the screen shows its message in their place.
+      for (const chart of charts) chart.dispose();
+      throw error;
+    }
     const observer =
       typeof ResizeObserver === 'undefined'
         ? undefined
@@ -146,10 +157,12 @@ export function DataCharts({ recent }: { recent: Recent }) {
       observer?.disconnect();
       for (const chart of charts) chart.dispose();
     };
-  }, [recent]);
+  }, [recent, now]);
 
   const span = recent.end - recent.start;
-  const place = (instant: number) => `${((instant - recent.start) / span) * 100}%`;
+  // Where an instant falls across the charts, in percent of their width.
+  const share = (instant: number) => ((instant - recent.start) / span) * 100;
+  const place = (instant: number) => `${share(instant)}%`;
 
   // The quarter-hour under the mouse, within the period: the charts span the whole width.
   const follow = (event: MouseEvent<HTMLElement>) => {
@@ -222,10 +235,15 @@ export function DataCharts({ recent }: { recent: Recent }) {
           </span>
         ))}
       </div>
-      {holidays.length > 0 && (
-        <ul className={styles.holidays}>
-          {holidays.map(([start, end, name]) => (
-            <li key={`${start}-${name}`} className={styles.holiday} style={{ left: place(start) }}>
+      {holidays.map(([kind, row]) => (
+        <ul key={kind} className={styles.holidays}>
+          {/* A name that starts late in the period stops at the right edge, with an ellipsis. */}
+          {row.map(([start, end, name]) => (
+            <li
+              key={`${start}-${name}`}
+              className={styles.holiday}
+              style={{ left: place(start), maxWidth: `${100 - share(start)}%` }}
+            >
               <bdi>{name}</bdi>
               <span className={styles.hidden}>
                 {` ${dayLabel.format(start)} – ${dayLabel.format(end - MINUTE)}`}
@@ -233,7 +251,7 @@ export function DataCharts({ recent }: { recent: Recent }) {
             </li>
           ))}
         </ul>
-      )}
+      ))}
       {cursor !== null && (
         <CursorCard recent={recent} cursor={cursor} left={place(cursor.instant)} />
       )}

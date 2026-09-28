@@ -5,8 +5,8 @@ import styles from './Sources.module.css';
 
 /**
  * Each source with its licence, the date it published for its last update when its licence
- * asks for it, and when Ampère received its last values. The names and licences are written in
- * the code, never read from the export (ADR 029).
+ * asks for it, and when Ampère received its last values; a date the export lacks is said to be
+ * missing. The names and licences are written in the code, never read from the export (ADR 029).
  */
 export function Sources({ recent }: { recent: Recent }) {
   return (
@@ -22,10 +22,12 @@ export function Sources({ recent }: { recent: Recent }) {
               <a href={TEXT.licences[licence]} rel="license noreferrer" target="_blank">
                 {licence}
               </a>
-              {dates?.updatedAt != null &&
-                ` · ${TEXT.data.updated} ${dateLabel.format(dates.updatedAt)}`}
-              {dates?.receivedAt != null &&
-                ` · ${TEXT.data.received} ${momentLabel.format(dates.receivedAt)}`}
+              {dates?.updatedAt != null
+                ? ` · ${TEXT.data.updated} ${dateLabel.format(dates.updatedAt)}`
+                : licence === 'Licence Ouverte 2.0' && ` · ${TEXT.data.updateUnknown}`}
+              {dates?.receivedAt != null
+                ? ` · ${TEXT.data.received} ${momentLabel.format(dates.receivedAt)}`
+                : ` · ${TEXT.data.nothingReceived}`}
             </li>
           );
         })}

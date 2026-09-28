@@ -96,23 +96,22 @@
   border-left: 1px dashed var(--ink-muted);
 }
 
-.message {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 440px;
-  max-width: 100%;
-  padding: var(--space-6);
-  background: var(--surface);
+.retry {
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  background: none;
   border: 1px solid var(--line);
 }
 
-.messageTitle {
-  font-size: 18px;
-  font-weight: 600;
+.retry:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
 }
 
-.messageDetail {
+.stale {
   font-size: 14px;
   color: var(--ink-soft);
 }

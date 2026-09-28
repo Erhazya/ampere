@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchRecent, parseRecent, RecentError } from './recent';
+import example from '../test/export-example.json';
+import { fetchRecent, parseRecent, RecentError, SERIES_IDS, SOURCE_IDS } from './recent';
 
 const START = 1_789_941_600_000; // Monday 21 September 2026, midnight in Paris
 const DAY = 86_400_000;
@@ -48,6 +49,53 @@ const answering = (status: number, body: unknown) =>
   vi.fn<typeof fetch>().mockResolvedValue(Response.json(body, { status }));
 
 describe('parseRecent', () => {
+  it('accepts the example export, which names every series and every source', () => {
+    // The API accepts the same file (tests/test_api.py).
+    const recent = parseRecent(example);
+    expect([...(recent?.series.keys() ?? [])]).toEqual(SERIES_IDS);
+    expect([...(recent?.sources.keys() ?? [])]).toEqual(SOURCE_IDS);
+  });
+
+  it('says where it refuses an export, in the names of the shape only', () => {
+    const places: string[] = [];
+    const refused = (where: string) => {
+      places.push(where);
+    };
+    const days = exported().days as Record<string, unknown>[];
+    days[4].start = START;
+    for (const value of [
+      'Vacances',
+      exported({
+        series: [
+          { id: 'co2', points: [] },
+          { id: '<b>wind</b>', points: [] },
+        ],
+      }),
+      exported({
+        series: [
+          {
+            id: 'co2',
+            points: [
+              [START, 1],
+              [START, 2],
+            ],
+          },
+        ],
+      }),
+      exported({ days }),
+      exported({ sources: [{ id: 'smard', updated_at: 'yesterday', received_at: null }] }),
+    ]) {
+      expect(parseRecent(value, refused)).toBeNull();
+    }
+    expect(places).toEqual([
+      'the answer',
+      'series[1].id',
+      'series[0].points[1]',
+      'days[4]',
+      'sources[0]',
+    ]);
+  });
+
   it('keeps the series, the days and the dates of each source', () => {
     const recent = parseRecent(exported());
     expect(recent).not.toBeNull();
@@ -129,6 +177,11 @@ describe('parseRecent', () => {
       'a date that is not an instant',
       exported({ sources: [{ id: 'smard', updated_at: 1.5, received_at: null }] }),
     ],
+    // Past 8.64e15 ms, a date no longer formats: the API refuses anything from 2100 on too.
+    [
+      'a date in 2100',
+      exported({ sources: [{ id: 'smard', updated_at: 4_102_444_800_000, received_at: null }] }),
+    ],
   ])('refuses %s', (_, value) => {
     expect(parseRecent(value)).toBeNull();
   });
@@ -165,9 +218,12 @@ describe('fetchRecent', () => {
     await expect(fetchRecent()).rejects.toMatchObject({ failure: { kind: 'http', status } });
   });
 
-  it('reports an answer that is not an export', async () => {
+  it('reports an answer that is not an export, and where it is refused', async () => {
     vi.stubGlobal('fetch', answering(200, { status: 'ok' }));
-    await expect(fetchRecent()).rejects.toMatchObject({ failure: { kind: 'format' } });
+    await expect(fetchRecent()).rejects.toMatchObject({
+      failure: { kind: 'format' },
+      cause: { message: 'The export is refused at generated_at' },
+    });
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>().mockResolvedValue(new Response('<html>', { status: 200 })),

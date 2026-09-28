@@ -77,6 +77,8 @@ L'auteur a choisi l'option 1 pour la source des données, la période, la mise e
   - L'en-tête de chaque graphique donne sa dernière valeur et son heure, et, pour la consommation et la température, ce que la prévision donne pour l'heure de l'export.
   - ECharts ne fait que dessiner. Le curseur est tenu par React : il suit la souris au quart d'heure près, trace une ligne et un point sur chaque courbe, et une carte donne les valeurs de ce quart d'heure, sans les séries qui n'en ont pas. La carte se place à hauteur de la souris, au-dessus d'elle dans la moitié basse de la fenêtre, et prend toute la largeur sur un écran étroit. Le lien entre graphiques d'ECharts (`echarts.connect`) a été écarté : il retrouve le curseur de chaque graphique par l'indice d'un point du premier, et le cachait sur la température, dont les séries sont plus courtes.
   - Une vue en tableau donne les mêmes valeurs heure par heure, pour un lecteur d'écran, le clavier, ou qui préfère les nombres.
+  - Une panne n'emporte pas la page. Si le code des graphiques ne se charge pas, ou si ECharts lève une erreur, un message prend leur place et la vue en tableau reste. Si l'API ne répond pas, l'écran en donne la raison, garde l'erreur dans la console du navigateur et propose de réessayer. Un export de plus de 26 heures est signalé, et une source sous Licence Ouverte sans date publiée le dit.
+  - Un export d'exemple, `web/src/test/export-example.json`, doit passer le contrôle de l'API et celui du tableau de bord : une série ou une source ajoutée d'un côté doit l'être de l'autre.
 
 ## Conséquences
 

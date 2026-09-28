@@ -1,11 +1,18 @@
 import { lazy, Suspense, useState } from 'react';
+import type { Recent } from '../api/recent';
 import { useRecent } from '../api/useRecent';
-import { TEXT } from '../text';
+import { momentLabel } from '../format';
+import { recentReason, TEXT } from '../text';
 import styles from './DataScreen.module.css';
 import { DataTable } from './DataTable';
+import { ErrorBoundary } from './ErrorBoundary';
+import { Message } from './Message';
 import { Sources } from './Sources';
 
 type View = 'chart' | 'table';
+
+/** Past this age, the export is late: the daily job writes one every day at about 14:00. */
+const STALE_MS = 26 * 3_600_000;
 
 // ECharts comes in a file of its own, fetched with the recent days: the rest of the screen shows
 // at once, and the state of the API never loads it.
@@ -15,11 +22,14 @@ const DataCharts = lazy(() =>
 
 /**
  * The Data screen (ADR 029): the last seven days in Paris time, today and tomorrow, as charts or
- * as a table, with the sources to cite. It asks the API once when it shows.
+ * as a table, with the sources to cite. It asks the API once when it shows, and again on demand
+ * after a failure.
  */
 export function DataScreen() {
-  const recent = useRecent();
+  const [recent, retry] = useRecent();
   const [view, setView] = useState<View>('chart');
+  // The moment of the visit, read once: the line of now and the days of the dates depend on it.
+  const [now] = useState(() => Date.now());
   return (
     <>
       <div className={styles.heading}>
@@ -30,16 +40,30 @@ export function DataScreen() {
         {recent.state === 'ready' && <ViewToggle view={view} onChange={setView} />}
       </div>
       {recent.state === 'loading' && <Message {...TEXT.data.loading} />}
-      {recent.state === 'failed' && (
-        <Message {...(recent.failure.kind === 'none' ? TEXT.data.none : TEXT.data.unavailable)} />
-      )}
+      {recent.state === 'failed' &&
+        (recent.failure.kind === 'none' ? (
+          <Message {...TEXT.data.none} />
+        ) : (
+          <Message title={TEXT.data.unavailable} detail={recentReason(recent.failure)}>
+            <button type="button" className={styles.retry} onClick={retry}>
+              {TEXT.data.retry}
+            </button>
+          </Message>
+        ))}
       {recent.state === 'ready' && (
         <>
-          <Legend />
+          {now - recent.recent.generatedAt > STALE_MS && (
+            <p className={styles.stale}>
+              {`${TEXT.data.stale} ${momentLabel.format(recent.recent.generatedAt)}.`}
+            </p>
+          )}
+          <Legend recent={recent.recent} now={now} />
           {view === 'chart' ? (
-            <Suspense fallback={<Message {...TEXT.data.loading} />}>
-              <DataCharts recent={recent.recent} />
-            </Suspense>
+            <ErrorBoundary fallback={<Message {...TEXT.data.chartsFailed} />}>
+              <Suspense fallback={<Message {...TEXT.data.chartsLoading} />}>
+                <DataCharts recent={recent.recent} now={now} />
+              </Suspense>
+            </ErrorBoundary>
           ) : (
             <DataTable recent={recent.recent} />
           )}
@@ -70,8 +94,9 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => 
   );
 }
 
-function Legend() {
-  const { measured, forecast, tomorrow, now } = TEXT.data.legend;
+/** What the marks of the charts mean: now only when its line is drawn, within the period. */
+function Legend({ recent, now }: { recent: Recent; now: number }) {
+  const { measured, forecast, tomorrow, now: nowWord } = TEXT.data.legend;
   return (
     <ul className={styles.legend}>
       <li>
@@ -86,19 +111,12 @@ function Legend() {
         <span className={styles.tomorrow} aria-hidden="true" />
         {tomorrow}
       </li>
-      <li>
-        <span className={styles.now} aria-hidden="true" />
-        {now}
-      </li>
+      {recent.start < now && now < recent.end && (
+        <li>
+          <span className={styles.now} aria-hidden="true" />
+          {nowWord}
+        </li>
+      )}
     </ul>
-  );
-}
-
-function Message({ title, detail }: { title: string; detail: string }) {
-  return (
-    <div className={styles.message} role="status">
-      <p className={styles.messageTitle}>{title}</p>
-      <p className={styles.messageDetail}>{detail}</p>
-    </div>
   );
 }

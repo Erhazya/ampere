@@ -1,9 +1,12 @@
 import type { EChartsCoreOption } from 'echarts/core';
 import type { Day, Point, Recent, SeriesId } from './api/recent';
 
+/** The charts of the Data screen, as text.ts names their words. */
+export type PanelId = 'price' | 'consumption' | 'co2' | 'solar' | 'temperature';
+
 /** One chart of the Data screen: a quantity, measured or published, and its forecast if any. */
 export interface Panel {
-  id: string;
+  id: PanelId;
   measured: SeriesId;
   forecast?: SeriesId;
   /** From the unit of the export to the unit on screen: MW to GW for the consumption. */

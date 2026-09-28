@@ -18,14 +18,15 @@ describe('useRecent', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('loads, then holds the recent days', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json(EXPORT)));
     const { result } = renderHook(() => useRecent());
-    expect(result.current).toEqual({ state: 'loading' });
+    expect(result.current[0]).toEqual({ state: 'loading' });
     await waitFor(() => {
-      expect(result.current.state).toBe('ready');
+      expect(result.current[0].state).toBe('ready');
     });
   });
 
@@ -40,15 +41,40 @@ describe('useRecent', () => {
     );
     const { result } = renderHook(() => useRecent());
     await waitFor(() => {
-      expect(result.current).toEqual({ state: 'failed', failure: { kind: 'none' } });
+      expect(result.current[0]).toEqual({ state: 'failed', failure: { kind: 'none' } });
     });
   });
 
-  it('names a network failure', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('offline')));
+  it('names a network failure, and keeps the error in the console', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const offline = new TypeError('offline');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(offline));
     const { result } = renderHook(() => useRecent());
     await waitFor(() => {
-      expect(result.current).toEqual({ state: 'failed', failure: { kind: 'network' } });
+      expect(result.current[0]).toEqual({ state: 'failed', failure: { kind: 'network' } });
+    });
+    expect(warn).toHaveBeenCalledWith('The recent days did not load', offline);
+  });
+
+  it('asks again when told to', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new TypeError('offline'))
+        .mockResolvedValue(Response.json(EXPORT)),
+    );
+    const { result } = renderHook(() => useRecent());
+    await waitFor(() => {
+      expect(result.current[0].state).toBe('failed');
+    });
+    act(() => {
+      result.current[1]();
+    });
+    expect(result.current[0]).toEqual({ state: 'loading' });
+    await waitFor(() => {
+      expect(result.current[0].state).toBe('ready');
     });
   });
 
@@ -69,7 +95,7 @@ describe('useRecent', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(RECENT_TIMEOUT_MS);
     });
-    expect(result.current).toEqual({ state: 'failed', failure: { kind: 'timeout' } });
+    expect(result.current[0]).toEqual({ state: 'failed', failure: { kind: 'timeout' } });
   });
 
   it('cancels its request when the screen goes', () => {
