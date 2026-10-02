@@ -20,7 +20,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@eslint-react/eslint-plugin": "^5.20.8",
+    "@eslint-react/eslint-plugin": "^5.22.1",
     "@eslint/js": "^10.0.1",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
